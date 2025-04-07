@@ -1,0 +1,14 @@
+# Panel 热加载配置
+watch:
+  # 监视这些目录和文件
+  - model
+  - view
+  - controller
+  - app.py
+  
+# 忽略这些文件和目录
+ignore:
+  - "*.pyc"
+  - "__pycache__"
+  - ".git"
+  - ".cursor" 
