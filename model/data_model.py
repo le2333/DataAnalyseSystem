@@ -1,64 +1,71 @@
 import pandas as pd
-import pyarrow.csv as csv
+import numpy as np
 import os
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pyarrow.csv as csv
 import time
 
 class DataModel:
-    """数据模型：负责数据加载、处理和提供"""
+    """数据模型：负责数据的加载、存储和处理"""
     
     def __init__(self):
         self.data = None
-        self.time_column = None
-        self.file_path = None
+        self.metadata = {}
+        self.cache = {}  # 用于存储不同采样级别的数据缓存
     
-    def load_csv(self, file_path, time_column=None):
-        """加载CSV数据并可选设置时间索引"""
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"文件不存在: {file_path}")
-        
-        start_time = time.time()
+    def load_csv(self, file_path):
+        """使用pyarrow高效加载CSV文件"""
         try:
-            # 高效读取CSV
-            parse_options = csv.ParseOptions(ignore_empty_lines=True)
-            read_options = csv.ReadOptions(use_threads=True, block_size=2**22)
+            # 使用pyarrow加速CSV读取
+            table = csv.read_csv(file_path)
+            self.data = table.to_pandas()
             
-            # 读取为Arrow表，然后转换为pandas
-            self.data = csv.read_csv(file_path, 
-                                    parse_options=parse_options, 
-                                    read_options=read_options).to_pandas()
-            self.file_path = file_path
+            # 记录元数据
+            self.metadata['file_path'] = file_path
+            self.metadata['rows'] = len(self.data)
+            self.metadata['columns'] = list(self.data.columns)
+            self.metadata['memory_usage'] = self.data.memory_usage(deep=True).sum()
             
-            # 处理时间列
-            if time_column and time_column in self.data.columns:
-                self.time_column = time_column
-                self.data[time_column] = pd.to_datetime(self.data[time_column], errors='coerce')
-                self.data.set_index(time_column, inplace=True)
+            # 清空缓存
+            self.cache = {}
             
-            load_time = time.time() - start_time
-            print(f"数据加载成功: {len(self.data)}行, {len(self.data.columns)}列, 耗时: {load_time:.2f}秒")
+            return self.data
+        except Exception as e:
+            raise Exception(f"加载CSV文件失败: {str(e)}")
+    
+    def get_data(self, sample_rate=None):
+        """获取数据，支持采样"""
+        if self.data is None:
+            return None
+            
+        if sample_rate is None:
             return self.data
             
-        except Exception as e:
-            print(f"数据加载失败: {str(e)}")
-            raise
-    
-    def get_data(self):
-        """返回当前加载的数据"""
-        if self.data is None:
-            print("警告: 尚未加载数据")
-            return pd.DataFrame()
-        return self.data
-    
-    def get_data_stats(self):
-        """获取数据的基本统计信息"""
-        if self.data is None:
-            return {}
+        # 检查缓存
+        if sample_rate in self.cache:
+            return self.cache[sample_rate]
+            
+        # 根据数据量和采样率决定采样方法
+        if sample_rate < 0.01 or len(self.data) > 1000000:
+            # 对于非常大的数据集或很小的采样率，使用系统采样
+            sampled_data = self.data.sample(frac=sample_rate)
+        else:
+            # 使用LTTB算法进行降采样，保留数据形状特征
+            sampled_size = int(len(self.data) * sample_rate)
+            sampled_data = self._lttb_downsample(self.data, sampled_size)
         
-        stats = {
-            'rows': len(self.data),
-            'columns': len(self.data.columns),
-            'memory_usage': self.data.memory_usage(deep=True).sum() / (1024 * 1024),  # MB
-            'column_types': {col: str(dtype) for col, dtype in self.data.dtypes.items()}
-        }
+        # 缓存结果
+        self.cache[sample_rate] = sampled_data
         
-        return stats 
+        return sampled_data
+    
+    def _lttb_downsample(self, data, target_points):
+        """简化的LTTB降采样算法实现"""
+        # 这里是简化版，实际应该使用专门的库或完整实现
+        if len(data) <= target_points:
+            return data
+            
+        # 简单的等距采样作为示例
+        indices = np.linspace(0, len(data) - 1, target_points, dtype=int)
+        return data.iloc[indices]

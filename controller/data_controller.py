@@ -43,6 +43,33 @@ class DataController(param.Parameterized):
         self.column_selector = pn.widgets.MultiSelect(name='选择要显示的列', options=[])
         self.visualization_button = pn.widgets.Button(name='可视化', button_type='success')
 
+        # 数据处理选项
+        self.rendering_method = pn.widgets.RadioButtonGroup(
+            name='渲染方式', 
+            options=['自动', 'WebGL', 'LTTB降采样', 'Datashader栅格化'],
+            value='自动'
+        )
+
+        # 多尺度分析选项
+        self.multiscale_checkbox = pn.widgets.Checkbox(
+            name='启用多尺度分析',
+            value=False
+        )
+
+        # 数据采样率
+        self.sample_rate = pn.widgets.FloatSlider(
+            name='数据采样率', 
+            start=0.01, 
+            end=1.0, 
+            value=1.0, 
+            step=0.01
+        )
+
+        # 性能监控开关
+        self.perf_monitor = pn.widgets.Checkbox(
+            name='显示性能监控', 
+            value=True
+        )
     
     def _bind_events(self):
         """绑定UI事件"""
@@ -126,49 +153,59 @@ class DataController(param.Parameterized):
             pn.Row(self.perf_info, sizing_mode='stretch_width'),
             sizing_mode='stretch_width'
         )
-    
+
     def get_visualization_interface(self):
         """返回数据可视化界面"""
-        return pn.Column(
-            # 标题行
-            pn.pane.Markdown('## 数据可视化', sizing_mode='stretch_width'),
-            
-            # 控制面板 - 独立的卡片
-            pn.Card(
+        # 基本选项面板
+        options_panel = pn.Column(
+            pn.Row('## 数据可视化选项', sizing_mode='stretch_width'),
+            pn.Row(
                 pn.Column(
-                    pn.Row(
-                        pn.Column(
-                            "选择要可视化的列：", 
-                            self.column_selector,
-                            width=300
-                        ),
-                        pn.Spacer(width=20),
-                        pn.Spacer(width=20),
-                        pn.Column(
-                            " ",  # 占位符确保按钮垂直居中
-                            self.visualization_button,
-                            width=150
-                        ),
-                        sizing_mode='stretch_width'
-                    ),
-                    pn.Row(self.loaded_data_info, sizing_mode='stretch_width'),
+                    "选择要显示的列：",
+                    self.column_selector,
+                    sizing_mode='stretch_width'
                 ),
-                title="控制面板",
-                collapsed=False,
+                pn.Column(
+                    "渲染设置：",
+                    self.rendering_method,
+                    pn.Row("采样率：", self.sample_rate),
+                    self.multiscale_checkbox,
+                    self.perf_monitor,
+                    sizing_mode='stretch_width'
+                ),
                 sizing_mode='stretch_width'
             ),
-            
-            # 性能信息
-            pn.Row(self.perf_info, sizing_mode='stretch_width', height=30),
-            
-            # 数据可视化区域 - 单独的卡片
-            pn.Card(
-                self.visualization_view, 
-                sizing_mode='stretch_width',
-                min_height=550,  # 确保可视化有足够的空间
-                margin=(10, 0)
+            pn.Row(
+                self.visualization_button,
+                sizing_mode='stretch_width'
             ),
-            
+            pn.layout.Divider(),
+            pn.Row(self.perf_info, sizing_mode='stretch_width'),
+            sizing_mode='stretch_width'
+        )
+        
+        # 将选项面板包装在可折叠Card中
+        options_card = pn.Card(
+            options_panel,
+            title="可视化选项",
+            collapsed=True,
             sizing_mode='stretch_width',
-            height=800  # 为整个界面设置足够的高度
-        ) 
+            margin=(0, 0, 2, 0)  # 添加底部margin，增加与下方卡片的距离
+        )
+        
+        # 将可视化视图包装在Card中
+        viz_card = pn.Card(
+            self.visualization_view,
+            title="可视化结果",
+            sizing_mode='stretch_width',  # 只在宽度上伸展，高度自适应
+            min_height=600,  # 设置最小高度，确保有足够空间显示图表
+            margin=(0, 0, 0, 0)  # 无margin
+        )
+        
+        # 垂直布局，让图表占据更多空间
+        return pn.Column(
+            options_card,
+            pn.Spacer(height=5),  # 添加一个小间隔
+            viz_card,
+            sizing_mode='stretch_width'  # 只在宽度上伸展，高度自适应内容
+        )
