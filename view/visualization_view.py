@@ -8,8 +8,8 @@ from model.timeseries_data import TimeSeriesData
 
 pn.extension(sizing_mode="stretch_width")
 
-class SingleDimView(param.Parameterized):
-    """一维数据处理与可视化视图。"""
+class VisualizationView(param.Parameterized):
+    """数据可视化视图。"""
     data_manager = param.Parameter(precedence=-1)
     available_visualizers = param.Dict(default={}, precedence=-1) # 可用的可视化服务
     available_preprocessors = param.Dict(default={}, precedence=-1) # 可用的预处理服务
@@ -85,6 +85,10 @@ class SingleDimView(param.Parameterized):
             return widgets
 
         for name, spec in params_spec.items():
+            # Skip height and add_minimap for the specific Plot Time Series service
+            if service_name == "Plot Time Series" and name in ['height', 'add_minimap']:
+                continue
+
             widget_type = spec.get('type', 'string').lower()
             label = spec.get('label', name)
             default = spec.get('default')
