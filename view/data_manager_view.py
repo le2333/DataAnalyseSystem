@@ -1,102 +1,165 @@
 import panel as pn
 import pandas as pd
 import param
-from typing import List, Dict
-# 假设 DataManager 会被 Controller 注入
+from typing import List, Dict, Any
+from model.data_manager import DataManager
+from model.timeseries_data import TimeSeriesData # For type checking
+from model.multidim_data import MultiDimData # For type checking
 
-pn.extension(sizing_mode="stretch_width")
+pn.extension('tabulator', sizing_mode="stretch_width")
 
 class DataManagerView(param.Parameterized):
-    """负责展示 DataManager 内容和提供基本交互 (重命名/删除) 的视图。"""
-    data_manager = param.Parameter(precedence=-1) # 依赖注入 DataManager
-    selected_data_id = param.String(default="", label="选中的数据ID") # 跟踪选中的行
+    """显示和管理 DataManager 中的数据，并触发操作。"""
+    data_manager = param.Parameter(precedence=-1)
 
     # UI 组件
-    data_table = param.ClassSelector(class_=pn.widgets.DataFrame, is_instance=True)
-    rename_input = param.ClassSelector(class_=pn.widgets.TextInput, is_instance=True)
-    rename_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
-    delete_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
-    details_area = param.ClassSelector(class_=pn.pane.Markdown, is_instance=True)
+    data_table = param.ClassSelector(class_=pn.widgets.Tabulator, is_instance=True)
+    # 使用 Panel 的 ButtonGroup 或独立的 Buttons
+    explore_1d_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
+    explore_multidim_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
+    process_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
+    compare_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
+    remove_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
 
-    def __init__(self, data_manager, **params):
+    # 内部状态
+    selected_data_ids = param.List(default=[])
+
+    # 事件，用于通知 Controller/AppController
+    # 参数可以是选择的 ID 列表
+    explore_1d_request = param.Event(default=False)
+    explore_multidim_request = param.Event(default=False)
+    process_request = param.Event(default=False)
+    compare_request = param.Event(default=False)
+    remove_request = param.Event(default=False)
+
+    def __init__(self, data_manager: DataManager, **params):
         super().__init__(data_manager=data_manager, **params)
         self._create_ui_components()
-        self._update_table()
+        self._update_data_table()
+        self._setup_watchers()
 
     def _create_ui_components(self):
-        self.data_table = pn.widgets.DataFrame(value=pd.DataFrame(),
-                                                titles={'id': 'ID', 'name': '名称', 'type': '类型', 'created_at': '创建时间', 'shape': '形状/长度', 'source_count': '来源数', 'operation': '生成操作'},
-                                                row_height=30, sizing_mode='stretch_width', max_height=400,
-                                                disabled=True, # 禁止直接编辑表格
-                                                auto_edit=False,
-                                                show_index=False)
-        self.rename_input = pn.widgets.TextInput(name="新名称", placeholder="输入新名称...")
-        self.rename_button = pn.widgets.Button(name="重命名", button_type="warning", disabled=True)
-        self.delete_button = pn.widgets.Button(name="删除选中项", button_type="danger", disabled=True)
-        self.details_area = pn.pane.Markdown("请先选择一个数据项查看详情", sizing_mode='stretch_width')
+        # 配置 Tabulator
+        self.data_table = pn.widgets.Tabulator(
+            pd.DataFrame(), # 使用空的 DataFrame
+            layout='fit_columns',
+            pagination='local', page_size=10,
+            selectable='checkbox', # 允许多选
+            show_index=False,
+            sizing_mode='stretch_width',
+            height=400 # 固定高度
+            # 可以根据需要添加 headers, formatters 等
+        )
 
-        # 绑定表格选择事件
-        self.data_table.param.watch(self._on_selection_change, 'selection')
+        # 操作按钮
+        self.explore_1d_button = pn.widgets.Button(name="探索 (1D)", button_type="primary", disabled=True)
+        self.explore_multidim_button = pn.widgets.Button(name="探索 (MultiD)", button_type="primary", disabled=True)
+        self.process_button = pn.widgets.Button(name="数据处理...", button_type="success", disabled=True)
+        self.compare_button = pn.widgets.Button(name="可视化比较...", button_type="warning", disabled=True)
+        self.remove_button = pn.widgets.Button(name="删除选中", button_type="danger", disabled=True)
+
+        # 绑定按钮点击事件到内部触发方法
+        self.explore_1d_button.on_click(self._trigger_explore_1d)
+        self.explore_multidim_button.on_click(self._trigger_explore_multidim)
+        self.process_button.on_click(self._trigger_process)
+        self.compare_button.on_click(self._trigger_compare)
+        self.remove_button.on_click(self._trigger_remove)
 
     @param.depends('data_manager._data_updated', watch=True)
-    def _update_table(self):
-        summaries = self.data_manager.list_data_summaries()
-        df = pd.DataFrame(summaries)
-        # 调整列顺序和显示
-        cols_to_show = ['id', 'name', 'type', 'shape', 'source_count', 'operation', 'created_at']
-        available_cols = [col for col in cols_to_show if col in df.columns]
-        self.data_table.value = df[available_cols] if not df.empty else pd.DataFrame(columns=available_cols)
-        self.data_table.selection = [] # 清除选择
-        self._update_buttons_state()
-        self._update_details_area()
+    def _update_data_table(self):
+        """更新数据表内容。"""
+        summaries = self.data_manager.get_summary_list()
+        # 过滤掉不适合显示的内部列，例如 _data
+        filtered_summaries = []
+        for s in summaries:
+             fs = {k: v for k, v in s.items() if not k.startswith('_')}
+             # 确保核心列存在
+             for key in ['id', 'name', 'type']:
+                 if key not in fs:
+                     fs[key] = s.get(key, 'N/A')
+             filtered_summaries.append(fs)
+        self.data_table.value = pd.DataFrame(filtered_summaries)
+        # 更新后清空选择并禁用按钮
+        self.data_table.selection = []
+        self._update_button_states()
+
+    def _setup_watchers(self):
+        """监听表格选择变化。"""
+        self.data_table.param.watch(self._on_selection_change, 'selection')
 
     def _on_selection_change(self, event):
-        if event.new:
-            selected_index = event.new[0] # 只处理单选
-            if selected_index < len(self.data_table.value):
-                self.selected_data_id = self.data_table.value.iloc[selected_index]['id']
-            else:
-                 self.selected_data_id = ""
+        """根据表格选择更新内部状态和按钮可用性。"""
+        selected_indices = event.new
+        if not selected_indices:
+            self.selected_data_ids = []
         else:
-            self.selected_data_id = ""
-        self._update_buttons_state()
-        self._update_details_area()
+            # 从 DataFrame 中获取选定行的 'id' 列
+            selected_df = self.data_table.value.iloc[selected_indices]
+            self.selected_data_ids = selected_df['id'].tolist()
+        self._update_button_states()
 
-    def _update_buttons_state(self):
-        enabled = bool(self.selected_data_id)
-        self.rename_button.disabled = not enabled
-        self.delete_button.disabled = not enabled
-        self.rename_input.value = "" # 清空输入框
+    def _update_button_states(self):
+        """根据选择的数据更新按钮的可用状态。"""
+        num_selected = len(self.selected_data_ids)
+        selected_types = set()
+        if num_selected > 0:
+            selected_types = {self.data_manager.get_data(sid).data_type for sid in self.selected_data_ids if self.data_manager.get_data(sid)}
 
-    def _update_details_area(self):
-        if self.selected_data_id:
-            data_obj = self.data_manager.get_data(self.selected_data_id)
-            if data_obj:
-                metadata = data_obj.get_summary() # 获取摘要即可
-                details_md = "### 数据详情\n"
-                for key, value in metadata.items():
-                    details_md += f"- **{key.replace('_', ' ').title()}:** {value}\n"
-                # 可以考虑显示更详细的元数据 data_object.metadata
-                self.details_area.object = details_md
-            else:
-                 self.details_area.object = "错误：无法找到所选数据项的详细信息。"
-        else:
-            self.details_area.object = "请先选择一个数据项查看详情"
+        is_single_selection = num_selected == 1
+        is_multi_selection = num_selected > 0
+
+        # 探索 (1D) 按钮: 仅当选中一个 TimeSeriesData 时可用
+        self.explore_1d_button.disabled = not (is_single_selection and TimeSeriesData.DATA_TYPE in selected_types)
+
+        # 探索 (MultiD) 按钮: 仅当选中一个 MultiDimData 时可用
+        self.explore_multidim_button.disabled = not (is_single_selection and MultiDimData.DATA_TYPE in selected_types)
+
+        # 数据处理按钮: 选中至少一个时可用
+        self.process_button.disabled = not is_multi_selection
+
+        # 可视化比较按钮: 选中多个同类型数据时可用 (简单逻辑，可改进)
+        is_comparable = num_selected > 1 and len(selected_types) == 1
+        self.compare_button.disabled = not is_comparable
+
+        # 删除按钮: 选中至少一个时可用
+        self.remove_button.disabled = not is_multi_selection
+
+    # --- 事件触发方法 --- #
+    def _trigger_explore_1d(self, event):
+        if self.selected_data_ids:
+            # 触发事件，传递单个 ID
+            self.param.trigger('explore_1d_request')
+
+    def _trigger_explore_multidim(self, event):
+        if self.selected_data_ids:
+            self.param.trigger('explore_multidim_request')
+
+    def _trigger_process(self, event):
+        if self.selected_data_ids:
+            self.param.trigger('process_request')
+
+    def _trigger_compare(self, event):
+        if self.selected_data_ids:
+            self.param.trigger('compare_request')
+
+    def _trigger_remove(self, event):
+        if self.selected_data_ids:
+            self.param.trigger('remove_request')
 
     def get_panel(self) -> pn.layout.Panel:
-        """返回数据管理页面的布局。"""
-        actions_row = pn.Row(
-            self.rename_input,
-            self.rename_button,
-            self.delete_button,
+        """返回数据管理视图的布局。"""
+        button_bar = pn.Row(
+            self.explore_1d_button,
+            self.explore_multidim_button,
+            self.process_button,
+            self.compare_button,
+            self.remove_button,
             sizing_mode='stretch_width'
         )
-        layout = pn.Column(
-            pn.pane.Markdown("## 数据管理"),
+        return pn.Column(
+            pn.pane.Markdown("## 数据管理中心"),
             self.data_table,
-            actions_row,
-            pn.pane.Markdown("### 详情"),
-            self.details_area,
-            sizing_mode='stretch_width'
-        )
-        return layout 
+            pn.pane.Markdown("### 操作"),
+            button_bar,
+            sizing_mode="stretch_width"
+        ) 

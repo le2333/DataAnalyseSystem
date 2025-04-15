@@ -10,6 +10,8 @@ from .registry import VISUALIZERS, register_service
 from typing import List, Tuple, Any # 导入 List
 import pandas as pd # Import pandas
 import traceback # 用于调试
+from holoviews.operation.datashader import datashade
+from holoviews.streams import RangeX
 
 def plot_timeseries_linked_view(
     data_containers: List[TimeSeriesData], # 接收列表
@@ -193,6 +195,98 @@ register_service(
     output_type=hv.Layout, # 输出是最终布局
     params_spec={
         # 只保留对整体视图有意义的参数
-        'width': {'type': 'integer', 'label': '图表宽度', 'default': 1500},
+        # 'width' is handled by responsive=True inside the function now
+        # 'height' is handled internally per plot type
     }
 )
+
+# --- MODIFIED: Service for Dynamic Rasterized Time Series Exploration WITH MINIMAP (Following Docs) --- #
+
+def plot_timeseries_dynamic_rasterized(
+    data_container: TimeSeriesData,
+    width: int = 1500,
+    height: int = 500,
+    minimap_height: int = 100,
+    line_width: float = 1, # Both plots use line_width
+    cmap: list = ['darkblue'] # Pass cmap to hvplot
+) -> hv.Layout:
+    """
+    为单个 TimeSeriesData 创建带导航缩略图的动态栅格化视图 (更接近 hvPlot 文档示例)。
+    """
+    if not isinstance(data_container, TimeSeriesData):
+        raise TypeError("输入必须是 TimeSeriesData 对象")
+
+    series = data_container.series
+    if series.empty:
+         return hv.Layout([]).opts(title=f"{data_container.name} (空)")
+
+    # Prepare DataFrame
+    series.index.name = 'time'
+    df = series.reset_index()
+    value_col_name = 'value'
+    if series.name:
+        df = df.rename(columns={series.name: value_col_name})
+    else:
+        if len(df.columns) == 2:
+             df.columns = ['time', value_col_name]
+        else:
+             raise ValueError(f"无法确定 '{data_container.name}' 的值列。")
+
+    # --- Create Main Plot using hvplot(rasterize=True) --- #
+    base_main_plot = df.hvplot(x='time', y=value_col_name,
+                             rasterize=True,
+                             width=width, height=height,
+                             line_width=line_width,
+                             cmap=cmap,
+                             colorbar=False # Explicitly disable colorbar for main plot too
+                             )
+
+    # Apply opts to the main plot, including range bounds and NO autorange
+    main_plot = base_main_plot.opts(
+            title=data_container.name,
+        show_grid=True,
+        # Remove autorange='y' as y-axis will be linked
+            backend_opts={
+            "x_range.bounds": (df['time'].min(), df['time'].max()),
+            # Restore y_range.bounds
+            "y_range.bounds": (df[value_col_name].min() - df[value_col_name].std()*0.1, df[value_col_name].max() + df[value_col_name].std()*0.1)
+        }
+    )
+
+    # --- Create Minimap Plot (using rasterize=True, similar to docs) --- #
+    base_minimap = df.hvplot(x="time", y=value_col_name,
+                           height=minimap_height, width=width,
+                           responsive=False,
+                           rasterize=True, # Use rasterize for minimap as in docs
+                           padding=(0, 0.1),
+                           line_width=line_width, # Match line width potentially
+                           color='darkgrey', # Use a distinct color for minimap
+                           colorbar=False)
+    # Disable toolbar for minimap
+    minimap_plot = base_minimap.opts(toolbar=None, default_tools=[]) # Remove yticks=None, title='' for now
+
+    # --- Link Main Plot and Minimap (linking X and Y as in docs) --- #
+    range_link = RangeToolLink(minimap_plot, main_plot, axes=["x", "y"])
+
+    # --- Combine into Layout (remains the same) --- #
+    final_layout = (main_plot + minimap_plot).opts(shared_axes=False).cols(1)
+
+    return final_layout
+
+# Register the updated dynamic service (output type is still Layout)
+# Params spec might need adjustment if cmap is configurable
+register_service(
+    registry=VISUALIZERS,
+    name="Plot Time Series (Dynamic Rasterized)",
+    function=plot_timeseries_dynamic_rasterized,
+    input_type=TimeSeriesData,
+    output_type=hv.Layout,
+    params_spec={
+        'height': {'type': 'integer', 'label': '主图高度', 'default': 500},
+        'minimap_height': {'type': 'integer', 'label': '导航图高度', 'default': 100},
+        'line_width': {'type': 'float', 'label': '线宽', 'default': 1},
+        # Consider adding cmap if needed
+    }
+)
+
+# Keep other visualizers if they exist...
