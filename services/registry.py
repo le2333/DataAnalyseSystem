@@ -1,10 +1,13 @@
+from typing import List
+
+
 PREPROCESSORS = {}
 ANALYZERS = {}
 VISUALIZERS = {}
 LOADERS = {} # 新增加载器注册表
 STRUCTURERS = {} # 新增：数据结构化服务注册表
 
-def register_service(registry: dict, name: str, function: callable, input_type: type | None, output_type: type, params_spec: dict | None = None):
+def register_service(registry: dict, name: str, function: callable, input_type: type | List[type] | None, output_type: type | List[type] | None, params_spec: dict | None = None, accepts_list: bool = False):
     """
     通用注册函数，用于向指定的注册表添加服务。
 
@@ -12,10 +15,11 @@ def register_service(registry: dict, name: str, function: callable, input_type: 
         registry: 目标注册表 (e.g., PREPROCESSORS, VISUALIZERS)。
         name: 服务的用户友好名称。
         function: 实现服务功能的函数或方法。
-        input_type: 服务期望的输入 DataContainer 类型 (或 None，如加载器)。
-        output_type: 服务返回的 DataContainer 类型。
+        input_type: 服务期望的输入 DataContainer 类型(或列表)/原始类型 (或 None)。
+        output_type: 服务返回的 DataContainer 类型(或列表)/结果类型 (或 None)。
         params_spec: (可选) 服务所需参数的规范，用于动态生成UI。
-                     格式: {'param_name': {'type': 'integer'/'string'/'float'/'boolean', 'default': value, 'label': '用户标签'}}
+                     格式: {'param_name': {'type': 'integer'/'string'/'float'/'boolean', 'label': '用户标签'}}
+        accepts_list: (可选) 指示服务函数是否接受 DataContainer 列表作为第一个参数，默认为 False。
     """
     if name in registry:
         print(f"警告: 服务名称 '{name}' 已存在于注册表中，将被覆盖。")
@@ -24,5 +28,6 @@ def register_service(registry: dict, name: str, function: callable, input_type: 
         "function": function,
         "input_type": input_type,
         "output_type": output_type,
-        "params": params_spec if params_spec is not None else {}
+        "params": params_spec if params_spec is not None else {},
+        "accepts_list": accepts_list # Store the flag
     } 

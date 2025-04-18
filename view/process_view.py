@@ -3,6 +3,7 @@ import param
 from typing import List, Dict, Any, Optional
 from model.data_manager import DataManager
 from services.registry import PREPROCESSORS
+from .view_utils import create_param_widgets
 
 pn.extension(sizing_mode="stretch_width")
 
@@ -71,50 +72,13 @@ class ProcessView(param.Parameterized):
     def _on_preprocessor_select(self, event):
         """当预处理器选择变化时，动态生成参数 UI。"""
         service_name = self.preprocessor_selector.value
-        self._current_preprocessor_widgets = self._create_param_widgets(service_name, PREPROCESSORS, self.preprocessor_params_area)
+        self._current_preprocessor_widgets = create_param_widgets(
+            service_name=service_name,
+            registry=PREPROCESSORS,
+            target_area=self.preprocessor_params_area
+        )
         # 启用/禁用按钮
         self.preprocess_button.disabled = not bool(service_name and self.selected_data_ids)
-
-    # 基本复用 VisualizationView 中的参数生成逻辑
-    def _create_param_widgets(self, service_name: str, registry: dict, target_area: pn.Column) -> Dict[str, pn.widgets.Widget]:
-        target_area.clear()
-        widgets = {}
-        if not service_name:
-             target_area.append(pn.pane.Markdown("请先选择一个处理方法。"))
-             return widgets
-
-        params_spec = registry.get(service_name, {}).get('params', {})
-        if not params_spec:
-            target_area.append(pn.pane.Markdown("此操作无需额外参数。"))
-            return widgets
-
-        for name, spec in params_spec.items():
-            widget_type = spec.get('type', 'string').lower()
-            label = spec.get('label', name)
-            default = spec.get('default')
-            kwargs = {'name': label, 'value': default}
-            widget = None
-            try:
-                if widget_type == 'integer':
-                    widget = pn.widgets.IntInput(**kwargs)
-                elif widget_type == 'float':
-                    widget = pn.widgets.FloatInput(**kwargs)
-                elif widget_type == 'boolean':
-                    widget = pn.widgets.Checkbox(name=label, value=bool(default))
-                elif widget_type == 'string':
-                    widget = pn.widgets.TextInput(**kwargs)
-                # 可以添加更多类型，如 Select 等
-                else:
-                    print(f"警告：未知的参数类型 '{widget_type}' for {name} in service '{service_name}'")
-                    widget = pn.widgets.TextInput(name=label, value=str(default))
-
-                if widget:
-                    target_area.append(widget)
-                    widgets[name] = widget
-            except Exception as e:
-                 print(f"错误：创建参数控件 '{name}' ({label}) for service '{service_name}' 失败: {e}")
-                 target_area.append(pn.pane.Alert(f"创建参数 '{label}' 失败: {e}", alert_type='danger'))
-        return widgets
 
     def get_process_config(self) -> Optional[Dict[str, Any]]:
         """获取当前处理配置。"""

@@ -4,6 +4,7 @@ import holoviews as hv
 from typing import Dict, Any, List, Optional
 from model.data_manager import DataManager
 from services.registry import VISUALIZERS # 只需 VISUALIZERS
+from .view_utils import create_param_widgets, update_visualization_area
 
 pn.extension(sizing_mode="stretch_width")
 
@@ -69,53 +70,14 @@ class ComparisonView(param.Parameterized):
         self.visualizer_selector.options = options
         self._on_visualizer_select(None) # 初始化参数区域
 
-    # 复用之前的参数生成逻辑
-    def _create_param_widgets(self, service_name: str, registry: dict, target_area: pn.Column) -> Dict[str, pn.widgets.Widget]:
-        target_area.clear()
-        widgets = {}
-        if not service_name:
-             target_area.append(pn.pane.Markdown("请先选择一个可视化方法。"))
-             return widgets
-
-        params_spec = registry.get(service_name, {}).get('params', {})
-        if not params_spec:
-            target_area.append(pn.pane.Markdown("此操作无需额外参数。"))
-            return widgets
-
-        for name, spec in params_spec.items():
-            widget_type = spec.get('type', 'string').lower()
-            label = spec.get('label', name)
-            default = spec.get('default')
-            kwargs = {'name': label, 'value': default}
-            widget = None
-
-            if name == 'width': # Explicitly skip generating width widget
-                continue
-
-            try:
-                if widget_type == 'integer':
-                    widget = pn.widgets.IntInput(**kwargs)
-                elif widget_type == 'float':
-                    widget = pn.widgets.FloatInput(**kwargs)
-                elif widget_type == 'boolean':
-                    widget = pn.widgets.Checkbox(name=label, value=bool(default))
-                elif widget_type == 'string':
-                    widget = pn.widgets.TextInput(**kwargs)
-                else:
-                    print(f"警告：未知的参数类型 '{widget_type}' for {name} in service '{service_name}'")
-                    widget = pn.widgets.TextInput(name=label, value=str(default))
-
-                if widget:
-                    target_area.append(widget)
-                    widgets[name] = widget
-            except Exception as e:
-                 print(f"错误：创建参数控件 '{name}' ({label}) for service '{service_name}' 失败: {e}")
-                 target_area.append(pn.pane.Alert(f"创建参数 '{label}' 失败: {e}", alert_type='danger'))
-        return widgets
-
     def _on_visualizer_select(self, event):
         service_name = self.visualizer_selector.value
-        self._current_visualizer_widgets = self._create_param_widgets(service_name, VISUALIZERS, self.visualizer_params_area)
+        self._current_visualizer_widgets = create_param_widgets(
+            service_name=service_name,
+            registry=VISUALIZERS,
+            target_area=self.visualizer_params_area,
+            skipped_params=['width'] # Skip width for visualizers
+        )
         self.visualize_button.disabled = not bool(service_name and self.selected_data_ids)
 
     def get_visualization_config(self) -> Optional[Dict[str, Any]]:
@@ -137,24 +99,9 @@ class ComparisonView(param.Parameterized):
                  return None
         return config
 
-    # update_visualization_area 保持不变，用于显示结果
-    def update_visualization_area(self, content: Any):
-        self.visualization_area.clear()
-        try:
-            # 尝试智能处理不同类型的内容
-            if isinstance(content, (hv.Layout, hv.DynamicMap, hv.HoloMap, hv.Overlay, hv.Element)):
-                self.visualization_area.append(pn.pane.HoloViews(content, sizing_mode='stretch_width'))
-            elif isinstance(content, pn.viewable.Viewable):
-                self.visualization_area.append(content)
-            elif isinstance(content, str):
-                # 假设字符串是警告或错误信息
-                self.visualization_area.append(pn.pane.Alert(content, alert_type='warning'))
-            else:
-                # 尝试直接添加未知类型
-                self.visualization_area.append(content)
-        except Exception as e:
-              print(f"更新可视化区域失败: {e}, 内容类型: {type(content)}")
-              self.visualization_area.append(pn.pane.Alert(f"无法显示结果 (类型: {type(content).__name__})\n错误: {e}", alert_type='danger'))
+    def update_visualization_area_display(self, content: Any):
+        """Updates the visualization display area using the utility function."""
+        update_visualization_area(self.visualization_area, content)
 
     def get_panel(self) -> pn.layout.Panel:
         """返回比较视图的布局。"""

@@ -149,15 +149,16 @@ register_service(
     registry=PREPROCESSORS,
     name="Merge 1D to MultiD",
     function=merge_1d_to_multidim,
-    # input_type 难以用简单类型表示，需要在控制器层面处理
-    # 可以定义为 Dict 或 None，或添加自定义标志
-    input_type=None, # 表示需要特殊处理
+    # input_type 可以用 List[TimeSeriesData] 更精确地描述
+    # 但由于控制器仍需特殊逻辑来构建列表，保持 None 或用 accepts_list 更清晰
+    input_type=None, # 保持 None，由 accepts_list 标志处理
     output_type=MultiDimData,
     params_spec={
         # new_multidim_name 需要从 UI 获取
         'new_multidim_name': {'type': 'string', 'label': '新多维数据名称', 'default': 'MergedData'}
         # 未来可以添加 'join_method': {'type': 'select', 'options': ['outer', 'inner'], ...}
-    }
+    },
+    accepts_list=True # Explicitly mark this service as accepting a list
 )
 
 # --- 可以添加更多预处理器 --- #

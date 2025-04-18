@@ -42,7 +42,11 @@ class AppController(param.Parameterized):
         # 实例化子控制器，传递依赖
         # Use param.update to set controller instances if using param.Parameter(ControllerClass)
         self.load_controller = LoadController(data_manager=self.data_manager)
-        self.data_manager_controller = DataManagerController(data_manager=self.data_manager, app_controller=self)
+        # Pass self.navigate_to as the callback
+        self.data_manager_controller = DataManagerController(
+            data_manager=self.data_manager,
+            navigation_callback=self.navigate_to # Pass the method directly
+        )
         self.process_controller = ProcessController(data_manager=self.data_manager)
         self.comparison_controller = ComparisonController(data_manager=self.data_manager)
         self.exploration_controller = ExplorationController(data_manager=self.data_manager) # Instantiate new
@@ -50,21 +54,24 @@ class AppController(param.Parameterized):
         # 初始化主区域
         self.main_area = pn.Column(self.data_manager_controller.get_view_panel(), sizing_mode='stretch_both')
 
-        self.param.watch(self._update_main_area, 'current_view_name')
+        # 监听视图切换请求 (直接由 current_view_name 改变触发)
+        self.param.watch(self._update_main_area_on_name_change, 'current_view_name')
 
-    def _update_main_area(self, event):
+    def _update_main_area_on_name_change(self, event):
+        """Updates the main area when current_view_name changes directly."""
         view_name = event.new
+        self._update_main_area(view_name)
+
+    # Extracted the core logic to a separate method for reuse
+    def _update_main_area(self, view_name: str):
+        """Updates the main content area based on the view name."""
         self.main_area.clear()
         if view_name == 'data_manager':
             self.main_area.append(self.data_manager_controller.get_view_panel())
         elif view_name == 'load':
-            # Assuming LoadController provides its view panel
             self.main_area.append(self.load_controller.get_view_panel())
         elif view_name == 'explore': # Unified exploration view
             self.main_area.append(self.exploration_controller.get_view_panel())
-        # Remove explore_1d and explore_multidim cases
-        # elif view_name == 'explore_1d': ...
-        # elif view_name == 'explore_multidim': ...
         elif view_name == 'process':
             self.main_area.append(self.process_controller.get_view_panel())
         elif view_name == 'compare':
@@ -73,17 +80,15 @@ class AppController(param.Parameterized):
             self.main_area.append(pn.pane.Alert(f"未知视图: {view_name}", alert_type='danger'))
 
     def navigate_to(self, view_name: str, **kwargs):
-        print(f"Navigating to: {view_name} with args: {kwargs}")
+        """Handles navigation: updates controller states and changes the current view."""
+        print(f"AppController: Navigating to: {view_name} with args: {kwargs}")
 
-        # 根据目标视图更新对应控制器的状态
-        if view_name == 'explore': # Unified explore
-            data_id = kwargs.get('data_id') # Expecting single ID
+        # 更新对应控制器的状态 (准备数据)
+        if view_name == 'explore':
+            data_id = kwargs.get('data_id')
             if data_id:
                  # Call the controller's method to set the data
                  self.exploration_controller.set_selected_data(data_id)
-        # Remove explore_1d and explore_multidim cases
-        # elif view_name == 'explore_1d': ...
-        # elif view_name == 'explore_multidim': ...
         elif view_name == 'process':
             selected_ids = kwargs.get('selected_ids')
             if selected_ids is not None:
@@ -92,24 +97,30 @@ class AppController(param.Parameterized):
             selected_ids = kwargs.get('selected_ids')
             if selected_ids is not None:
                 self.comparison_controller.set_selected_data(selected_ids)
+        # No special preparation needed for 'load' or 'data_manager' currently
 
-        # 切换视图
-        self.current_view_name = view_name
+        # 切换视图 (触发 _update_main_area_on_name_change)
+        if self.current_view_name != view_name:
+             self.current_view_name = view_name
+        else:
+             # If navigating to the same view, still ensure the main area is updated correctly
+             # (e.g., if navigating with different data)
+             self._update_main_area(view_name)
 
     def get_app_layout(self) -> pn.template.MaterialTemplate:
         template = pn.template.MaterialTemplate(title="数据分析系统")
 
-        # Update sidebar to reflect new structure if needed
-        # DataManagerView now handles triggering navigation
-        sidebar_content = pn.Column(
-            pn.widgets.Button(name="数据加载", button_type='primary', width=200, align='center'),
-            pn.widgets.Button(name="数据管理", button_type='primary', width=200, align='center'),
-            width=220
-        )
-        sidebar_content[0].on_click(lambda event: self.navigate_to('load'))
-        sidebar_content[1].on_click(lambda event: self.navigate_to('data_manager'))
+        # --- Remove Sidebar --- #
+        # sidebar_content = pn.Column(
+        #     pn.widgets.Button(name="数据加载", button_type='primary', width=200, align='center',
+        #                       on_click=lambda event: self.navigate_to('load')),
+        #     pn.widgets.Button(name="数据管理", button_type='primary', width=200, align='center',
+        #                       on_click=lambda event: self.navigate_to('data_manager')),
+        #     width=220
+        # )
+        # template.sidebar.append(sidebar_content)
 
-        template.sidebar.append(sidebar_content)
+        # Just append the main area
         template.main.append(self.main_area)
 
         return template 

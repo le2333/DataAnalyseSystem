@@ -7,6 +7,8 @@ from services.registry import VISUALIZERS
 # Import specific data types for filtering service list
 from model.timeseries_data import TimeSeriesData
 from model.multidim_data import MultiDimData
+# Import the new utility functions
+from .view_utils import create_param_widgets, update_visualization_area
 
 pn.extension(sizing_mode="stretch_width")
 
@@ -51,50 +53,82 @@ class ExplorationView(param.Parameterized):
         self._filter_and_update_visualizer_options()
         self.visualizer_params_area.clear()
         # Reset visualization area directly here
-        self.visualization_area.clear()
-        self.visualization_area.append(pn.pane.Alert("请选择可视化方法并点击生成。", alert_type='info'))
+        update_visualization_area(self.visualization_area, pn.pane.Alert("请选择可视化方法并点击生成。", alert_type='info'))
         self._current_visualizer_widgets = {}
         self.visualize_button.disabled = True
 
-    # ... _update_selected_data_info, _filter_and_update_visualizer_options, _create_param_widgets, _on_visualizer_select, get_exploration_config methods remain the same ...
+    def _update_selected_data_info(self):
+        if not self.selected_data_id:
+            self.selected_data_info.object = "**当前未选择数据**"
+            self.visualize_button.disabled = True
+            return
+        dc = self.data_manager.get_data(self.selected_data_id)
+        if dc:
+            info_str = f"**选定数据:** {dc.name} ({dc.data_type})"
+        else:
+            info_str = f"**错误:** 未找到数据 ID {self.selected_data_id}"
+            self.selected_data_id = "" # Reset if not found?
+        self.selected_data_info.object = info_str
+        # Enable button only if service is also selected
+        self.visualize_button.disabled = not bool(self.visualizer_selector.value)
 
-    # Re-introduce update_visualization_area method
-    def update_visualization_area(self, content: Any):
-        self.visualization_area.clear()
-        try:
-            if isinstance(content, (hv.Layout, hv.DynamicMap, hv.HoloMap, hv.Overlay, hv.Element)):
-                # Ensure stretch_width for HoloViews pane
-                self.visualization_area.append(pn.pane.HoloViews(content, sizing_mode='stretch_width'))
-            elif isinstance(content, pn.viewable.Viewable):
-                self.visualization_area.append(content)
-            elif isinstance(content, str):
-                # Assume string is a message (e.g., error)
-                self.visualization_area.append(pn.pane.Alert(content, alert_type='warning'))
-            else:
-                # Try adding unknown content directly
-                self.visualization_area.append(content)
-        except Exception as e:
-              print(f"更新可视化区域失败: {e}, 内容类型: {type(content)}")
-              self.visualization_area.append(pn.pane.Alert(f"无法显示结果 (类型: {type(content).__name__})\n错误: {e}", alert_type='danger'))
+    def _filter_and_update_visualizer_options(self):
+        options = ['']
+        data_container = self.data_manager.get_data(self.selected_data_id)
+        if data_container:
+            current_data_type = type(data_container)
+            for name, info in VISUALIZERS.items():
+                input_type = info.get('input_type')
+                # Check if service expects single item and type matches
+                if isinstance(input_type, type) and issubclass(current_data_type, input_type):
+                    options.append(name)
+                # Allow services with no specific input type (generic?)
+                # elif input_type is None:
+                #     options.append(name)
+        self.visualizer_selector.options = sorted(list(set(options))) # Ensure unique & sorted
+        # Reset selection if current selection is no longer valid
+        if self.visualizer_selector.value not in options:
+             self.visualizer_selector.value = '' # Reset to blank
+        self._on_visualizer_select(None) # Trigger param update
 
-    # Remove _update_plot_display method
-    # @param.depends('current_plot', watch=True)
-    # def _update_plot_display(self):
-    #    ...
-
-    # Add the missing _on_visualizer_select method back
     def _on_visualizer_select(self, event):
-        """Called when a visualizer is selected from the dropdown."""
         service_name = self.visualizer_selector.value
-        # Use the existing _create_param_widgets method to update the UI
-        self._current_visualizer_widgets = self._create_param_widgets(service_name, VISUALIZERS, self.visualizer_params_area)
-        # Enable button only if a valid service and data are selected
+        # Call the utility function, skipping 'width'
+        self._current_visualizer_widgets = create_param_widgets(
+            service_name=service_name,
+            registry=VISUALIZERS,
+            target_area=self.visualizer_params_area,
+            skipped_params=['width'] # Skip width for visualizers
+        )
         self.visualize_button.disabled = not bool(service_name and self.selected_data_id)
+
+    def update_visualization_area_display(self, content: Any):
+        """Updates the visualization display area using the utility function."""
+        update_visualization_area(self.visualization_area, content)
 
     def get_exploration_config(self) -> Optional[Dict[str, Any]]:
         """获取当前探索配置。"""
         service_name = self.visualizer_selector.value
-        # ... rest of the file ...
+        # Basic check - ensure data ID exists
+        if not service_name or not self.selected_data_id:
+            return None
+        # Double check data exists in manager before returning config
+        if not self.data_manager.get_data(self.selected_data_id):
+            print(f"Warning: Data ID {self.selected_data_id} no longer valid in get_exploration_config.")
+            return None
+
+        config = {
+            'selected_data_id': self.selected_data_id,
+            'service_name': service_name,
+            'params': {}
+        }
+        for name, widget in self._current_visualizer_widgets.items():
+            try:
+                 config['params'][name] = widget.value
+            except Exception as e:
+                 print(f"错误: 获取探索参数 '{name}' 的值失败: {e}")
+                 return None
+        return config
 
     def get_panel(self) -> pn.layout.Panel:
         # ... layout remains the same ...

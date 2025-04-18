@@ -38,6 +38,12 @@ class TimeSeriesData(DataContainer):
         """明确返回 Pandas Series 类型的数据。"""
         return self._data # 在基类中是 _data
 
+    # Override base data property to return specific type
+    @property
+    def data(self) -> pd.Series:
+        """返回 Pandas Series 类型的数据 (覆盖基类属性)。"""
+        return self._data
+
     def get_summary(self) -> dict:
         """获取用于列表展示的摘要信息（覆盖基类）。"""
         summary = super().get_summary()

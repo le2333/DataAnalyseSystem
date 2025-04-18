@@ -55,17 +55,20 @@ class ProcessController(param.Parameterized):
 
         service_func = service_info['function']
         input_type = service_info.get('input_type') # 可能为 None
+        accepts_list_flag = service_info.get('accepts_list', False) # Get the flag
 
         try:
-            # --- 特殊处理需要列表输入的服务 (例如 merge_1d_to_multidim) --- #
-            if service_name == "Merge 1D to MultiD":
-                # 验证输入是否都是 TimeSeriesData
+            # --- 处理接受列表输入的服务 --- #
+            if accepts_list_flag:
+                # 验证输入类型 (假设服务文档或 input_type 提供了预期类型)
+                # 这里我们仍然硬编码检查 TimeSeriesData，因为该服务特定需要它
+                # 更通用的方法可能需要更丰富的类型系统或服务元数据
                 data_containers_list = []
                 valid = True
                 for data_id in selected_ids:
                     dc = self.data_manager.get_data(data_id)
                     if not isinstance(dc, TimeSeriesData):
-                        self._show_error_and_reset(f"'{service_name}' 要求所有输入都是时间序列数据，但 '{dc.name}' 不是。")
+                        self._show_error_and_reset(f"'{service_name}' 要求所有输入都是时间序列数据，但 '{dc.name}' ({dc.data_type}) 不是。")
                         valid = False
                         break
                     data_containers_list.append(dc)
@@ -73,14 +76,16 @@ class ProcessController(param.Parameterized):
                     return
 
                 # 调用服务，传递列表和从 params 获取的额外参数
-                result_data = service_func(
-                    data_containers=data_containers_list,
-                    **params # new_multidim_name 在这里面
-                )
+                # 服务的第一个参数预期是列表 (e.g., data_containers=...)
+                # 我们需要知道参数名，假设是 'data_containers'
+                # 更健壮的方式是约定或从服务元数据获取参数名
+                payload = {'data_containers': data_containers_list}
+                result_data = service_func(**payload, **params)
+
                 # 处理单个结果
                 if isinstance(result_data, DataContainer):
                     new_id = self.data_manager.add_data(result_data)
-                    self.view.show_status(f"成功: 合并完成。新多维数据 '{result_data.name}' ({new_id[:8]}) 已添加。", alert_type='success')
+                    self.view.show_status(f"成功: 操作 '{service_name}' 完成。新数据 '{result_data.name}' ({new_id[:8]}) 已添加。", alert_type='success')
                 else:
                      self.view.show_status(f"警告: '{service_name}' 未返回有效的数据容器。", alert_type='warning')
 
@@ -90,17 +95,26 @@ class ProcessController(param.Parameterized):
                 errors_occurred = []
                 for data_id in selected_ids:
                     data_container = self.data_manager.get_data(data_id)
+                    if not data_container:
+                        errors_occurred.append(f"跳过: 未找到 ID {data_id}")
+                        continue
                     if not isinstance(data_container, input_type):
-                        errors_occurred.append(f"跳过: '{service_name}' 不适用于 '{data_container.name}' (类型 {data_container.data_type})。")
+                        errors_occurred.append(f"跳过: '{service_name}' 不适用于 '{data_container.name}' (类型 {data_container.data_type})，需要 {input_type.__name__}。")
                         continue
                     try:
-                        result_data = service_func(data_container=data_container, **params)
+                        # 服务的第一个参数预期是单个对象 (e.g., data_container=...)
+                        # 假设参数名为 'data_container'
+                        payload = {'data_container': data_container}
+                        result_data = service_func(**payload, **params)
+
                         if isinstance(result_data, DataContainer):
                             new_id = self.data_manager.add_data(result_data)
                             results_added += 1
                         else:
                              errors_occurred.append(f"警告: '{service_name}' 应用于 '{data_container.name}' 后未返回有效数据容器。")
                     except Exception as item_e:
+                        tb_str_item = traceback.format_exc()
+                        print(f"Error processing item {data_container.name} with {service_name}:\n{tb_str_item}")
                         errors_occurred.append(f"错误: 应用 '{service_name}' 于 '{data_container.name}' 时失败: {item_e}")
 
                 # 显示最终状态
@@ -111,11 +125,15 @@ class ProcessController(param.Parameterized):
                 elif results_added > 0:
                     self.view.show_status(status_msg, alert_type='success')
                 else:
-                    self.view.show_status("没有数据被处理或添加。", alert_type='info')
+                    self.view.show_status("没有数据被处理或添加（可能由于类型不匹配或处理失败）。", alert_type='info')
 
-            # --- 处理 input_type 为 None 或未知的情况 --- #
+            # --- 处理 input_type 为 None 且 accepts_list 为 False 的情况 --- #
+            # (或者其他未明确处理的情况，例如服务期望原始类型如 DataFrame?)
             else:
-                 self._show_error_and_reset(f"无法处理服务 '{service_name}'：输入类型定义不清晰。")
+                 # This case needs clarification: what kind of service fits here?
+                 # Maybe a service operating without specific DataContainer input?
+                 # Or a service whose input type wasn't registered correctly?
+                 self._show_error_and_reset(f"无法处理服务 '{service_name}'：输入类型定义不清晰或不受支持 ({input_type})。")
                  return
 
         except Exception as e:

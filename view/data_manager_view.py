@@ -14,9 +14,9 @@ class DataManagerView(param.Parameterized):
 
     # UI 组件
     data_table = param.ClassSelector(class_=pn.widgets.Tabulator, is_instance=True)
-    # 使用 Panel 的 ButtonGroup 或独立的 Buttons
-    explore_1d_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
-    explore_multidim_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
+    # Add Load button
+    load_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
+    explore_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
     process_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
     compare_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
     remove_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
@@ -24,10 +24,9 @@ class DataManagerView(param.Parameterized):
     # 内部状态
     selected_data_ids = param.List(default=[])
 
-    # 事件，用于通知 Controller/AppController
-    # 参数可以是选择的 ID 列表
-    explore_1d_request = param.Event(default=False)
-    explore_multidim_request = param.Event(default=False)
+    # --- Events triggered by this view --- #
+    load_request = param.Event(default=False) # Added event for loading
+    explore_request = param.Event(default=False)
     process_request = param.Event(default=False)
     compare_request = param.Event(default=False)
     remove_request = param.Event(default=False)
@@ -51,16 +50,17 @@ class DataManagerView(param.Parameterized):
             # 可以根据需要添加 headers, formatters 等
         )
 
-        # 操作按钮
-        self.explore_1d_button = pn.widgets.Button(name="探索 (1D)", button_type="primary", disabled=True)
-        self.explore_multidim_button = pn.widgets.Button(name="探索 (MultiD)", button_type="primary", disabled=True)
+        # --- 操作按钮 --- #
+        # Add Load Button definition
+        self.load_button = pn.widgets.Button(name="数据加载...", button_type="primary", css_classes=['pn-button-primary']) # Always enabled
+        self.explore_button = pn.widgets.Button(name="探索数据", button_type="primary", disabled=True)
         self.process_button = pn.widgets.Button(name="数据处理...", button_type="success", disabled=True)
         self.compare_button = pn.widgets.Button(name="可视化比较...", button_type="warning", disabled=True)
         self.remove_button = pn.widgets.Button(name="删除选中", button_type="danger", disabled=True)
 
-        # 绑定按钮点击事件到内部触发方法
-        self.explore_1d_button.on_click(self._trigger_explore_1d)
-        self.explore_multidim_button.on_click(self._trigger_explore_multidim)
+        # --- 绑定按钮点击事件到内部触发方法 --- #
+        self.load_button.on_click(self._trigger_load)
+        self.explore_button.on_click(self._trigger_explore)
         self.process_button.on_click(self._trigger_process)
         self.compare_button.on_click(self._trigger_compare)
         self.remove_button.on_click(self._trigger_remove)
@@ -68,6 +68,7 @@ class DataManagerView(param.Parameterized):
     @param.depends('data_manager._data_updated', watch=True)
     def _update_data_table(self):
         """更新数据表内容。"""
+        # Call the unified method, default sort is by name
         summaries = self.data_manager.get_summary_list()
         # 过滤掉不适合显示的内部列，例如 _data
         filtered_summaries = []
@@ -94,8 +95,17 @@ class DataManagerView(param.Parameterized):
             self.selected_data_ids = []
         else:
             # 从 DataFrame 中获取选定行的 'id' 列
-            selected_df = self.data_table.value.iloc[selected_indices]
-            self.selected_data_ids = selected_df['id'].tolist()
+            # Need to handle potential KeyError if 'id' column is missing in rare cases
+            try:
+                selected_df = self.data_table.value.iloc[selected_indices]
+                if 'id' in selected_df.columns:
+                    self.selected_data_ids = selected_df['id'].tolist()
+                else:
+                    print("Warning: 'id' column not found in data table value.")
+                    self.selected_data_ids = []
+            except IndexError:
+                 print("Warning: IndexError during selection change.")
+                 self.selected_data_ids = []
         self._update_button_states()
 
     def _update_button_states(self):
@@ -103,54 +113,59 @@ class DataManagerView(param.Parameterized):
         num_selected = len(self.selected_data_ids)
         selected_types = set()
         if num_selected > 0:
-            selected_types = {self.data_manager.get_data(sid).data_type for sid in self.selected_data_ids if self.data_manager.get_data(sid)}
+            # Use list comprehension for potentially safer access
+            selected_types = {dc.data_type for sid in self.selected_data_ids if (dc := self.data_manager.get_data(sid))}
 
         is_single_selection = num_selected == 1
         is_multi_selection = num_selected > 0
 
-        # 探索 (1D) 按钮: 仅当选中一个 TimeSeriesData 时可用
-        self.explore_1d_button.disabled = not (is_single_selection and TimeSeriesData.DATA_TYPE in selected_types)
-
-        # 探索 (MultiD) 按钮: 仅当选中一个 MultiDimData 时可用
-        self.explore_multidim_button.disabled = not (is_single_selection and MultiDimData.DATA_TYPE in selected_types)
+        # 探索按钮: 仅当选中一个 (1D or MultiD) 时可用
+        is_explorable_type = TimeSeriesData.DATA_TYPE in selected_types or MultiDimData.DATA_TYPE in selected_types
+        self.explore_button.disabled = not (is_single_selection and is_explorable_type)
 
         # 数据处理按钮: 选中至少一个时可用
         self.process_button.disabled = not is_multi_selection
 
-        # 可视化比较按钮: 选中多个同类型数据时可用 (简单逻辑，可改进)
+        # 可视化比较按钮: 选中多个同类型数据时可用
         is_comparable = num_selected > 1 and len(selected_types) == 1
         self.compare_button.disabled = not is_comparable
 
         # 删除按钮: 选中至少一个时可用
         self.remove_button.disabled = not is_multi_selection
+        # Load button is always enabled
+        # self.load_button.disabled = False 
 
     # --- 事件触发方法 --- #
-    def _trigger_explore_1d(self, event):
-        if self.selected_data_ids:
-            # 触发事件，传递单个 ID
-            self.param.trigger('explore_1d_request')
+    def _trigger_load(self, event):
+        """Triggers the load_request event."""
+        self.load_request = True
 
-    def _trigger_explore_multidim(self, event):
+    def _trigger_explore(self, event):
         if self.selected_data_ids:
-            self.param.trigger('explore_multidim_request')
+            # Trigger event with True, controller will get ID from view state
+            self.explore_request = True
 
     def _trigger_process(self, event):
         if self.selected_data_ids:
-            self.param.trigger('process_request')
+             # Trigger event with True, controller will get IDs from view state
+            self.process_request = True
 
     def _trigger_compare(self, event):
         if self.selected_data_ids:
-            self.param.trigger('compare_request')
+             # Trigger event with True, controller will get IDs from view state
+            self.compare_request = True
 
     def _trigger_remove(self, event):
         if self.selected_data_ids:
-            self.param.trigger('remove_request')
+             # This one was already correct
+            self.remove_request = True
 
     def get_panel(self) -> pn.layout.Panel:
         """返回数据管理视图的布局。"""
+        # Add Load button to the button bar
         button_bar = pn.Row(
-            self.explore_1d_button,
-            self.explore_multidim_button,
+            self.load_button, # Add load button here
+            self.explore_button,
             self.process_button,
             self.compare_button,
             self.remove_button,

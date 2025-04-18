@@ -5,6 +5,10 @@ from model.data_manager import DataManager
 from view.load_view import LoadView
 from services.registry import STRUCTURERS # 导入数据结构化注册表
 import os
+import traceback
+
+# Define the default structurer service name as a constant
+DEFAULT_CSV_STRUCTURER_SERVICE = "Structure DataFrame to Time Series"
 
 class LoadController(param.Parameterized):
     """处理 LoadView 交互，读取文件，调用结构化服务并将数据添加到 DataManager。"""
@@ -44,11 +48,11 @@ class LoadController(param.Parameterized):
         self.view.load_button.loading = True
         self.view.update_status("正在加载和处理数据...")
 
-        # --- 获取结构化服务 --- #
-        structurer_name = "Structure DataFrame to Time Series"
+        # --- 获取结构化服务 (use constant) --- #
+        structurer_name = DEFAULT_CSV_STRUCTURER_SERVICE # Use the constant
         structurer_info = STRUCTURERS.get(structurer_name)
         if not structurer_info:
-            self.view.update_status(f"错误：找不到数据结构化服务 '{structurer_name}'")
+            self.view.update_status(f"错误：找不到默认的数据结构化服务 '{structurer_name}'")
             self.is_loading = False
             self.view.load_button.loading = False
             return
@@ -97,6 +101,9 @@ class LoadController(param.Parameterized):
                  error_messages.append(f"{filename}: 处理失败 - {e}")
             except Exception as e: # 捕获其他意外错误
                  error_count += 1
+                 # Include traceback for unexpected errors
+                 tb_str = traceback.format_exc()
+                 print(f"Unexpected error processing {filename}:\n{tb_str}")
                  error_messages.append(f"{filename}: 发生意外错误 - {e}")
             finally:
                 # 更新进度（如果需要）

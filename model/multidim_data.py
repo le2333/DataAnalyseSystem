@@ -32,6 +32,12 @@ class MultiDimData(DataContainer):
         # Assuming self._data stores the DataFrame in the base class
         return self._data
 
+    # Override base data property to return specific type
+    @property
+    def data(self) -> pd.DataFrame:
+        """返回 Pandas DataFrame 类型的数据 (覆盖基类属性)。"""
+        return self._data
+
     def get_summary(self) -> dict:
         """获取用于列表展示的摘要信息。"""
         summary = super().get_summary()

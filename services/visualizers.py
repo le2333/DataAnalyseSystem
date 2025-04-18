@@ -12,6 +12,32 @@ import pandas as pd # Import pandas
 import traceback # 用于调试
 from holoviews.operation.datashader import datashade
 from holoviews.streams import RangeX
+import datetime as dt # Import datetime
+import param # For reactive programming if needed
+
+# Helper class to bridge HoloViews stream and Panel parameter
+class PlotStateManager(param.Parameterized):
+    current_x_range = param.Tuple(default=None, length=2, precedence=-1)
+
+    def __init__(self, range_x_stream, default_range, **params):
+        super().__init__(**params)
+        self.default_range = default_range
+        # Initialize with default
+        self.current_x_range = default_range
+        # Link the HoloViews stream to update our parameter
+        # Use watch=True for continuous updates might be better? Or .param.watch?
+        # Using .param.watch seems more standard for stream parameters
+        range_x_stream.param.watch(self._update_x_range, 'x_range')
+
+    # Callback function for the watcher
+    def _update_x_range(self, event):
+        new_range = event.new
+        # Ensure it's a tuple before setting
+        if isinstance(new_range, tuple) and len(new_range) == 2:
+            self.current_x_range = new_range
+        elif self.current_x_range != self.default_range: # Avoid loops if already default
+            # Reset to default if the new value is invalid or None
+             self.current_x_range = self.default_range
 
 def plot_timeseries_linked_view(
     data_containers: List[TimeSeriesData], # 接收列表
@@ -87,21 +113,19 @@ def plot_timeseries_linked_view(
     # --- 2. 使用 subplots=True 和 by 参数绘制主图布局 --- #
     main_plots_layout = None
     try:
-        # 注意：width 可能需要调整，或依赖 responsive
-        # shared_axes=True 是 subplots 的默认行为，提供内部联动
+        # Remove fixed width and height, rely on responsive=True and sizing_mode
         main_plots_layout = combined_df.hvplot(
             x='time', y='value',
             by=category_col,
             subplots=True,
             rasterize=True,
             line_width=1,
-            width=width, # 每个子图的宽度，hvplot 会尝试适应
             height=plot_height, # 每个子图的高度
-            responsive=True, # 让布局尝试响应式调整
-            shared_axes=True, # 确保轴联动（默认）
-            legend=False, # 通常子图标题已足够，隐藏图例
-            padding=(0.05, 0.1) # 添加一些内边距
-        ).cols(1) # 强制单列垂直布局
+            responsive=True, # Keep responsive
+            shared_axes=True,
+            legend=False,
+            padding=(0.05, 0.1)
+        ).cols(1)
 
         if not main_plots_layout:
              raise ValueError("hvplot 未能生成有效的子图布局。")
@@ -131,9 +155,10 @@ def plot_timeseries_linked_view(
             else:
                 raise ValueError("无法确定缩略图的值列")
 
+            # Remove fixed width and height for minimap as well
             shared_minimap = df_minimap.hvplot(x="time", y=value_col_name_map,
                                              rasterize=True,
-                                             min_width=width, height=minimap_height,
+                                             height=minimap_height,
                                              responsive=True, padding=(0, 0.1), colorbar=False,
                                              color='darkgrey', line_width=1
                                              ).opts(toolbar=None, title='', yticks=None)
@@ -233,45 +258,42 @@ def plot_timeseries_dynamic_rasterized(
              raise ValueError(f"无法确定 '{data_container.name}' 的值列。")
 
     # --- Create Main Plot using hvplot(rasterize=True) --- #
-    base_main_plot = df.hvplot(x='time', y=value_col_name,
+    main_plot = df.hvplot(x='time', y=value_col_name,
                              rasterize=True,
-                             width=width, height=height,
+                            #  downsample=True,
+                             resample_when=2000,
+                             height=height,
+                             responsive=True, # Add responsive
                              line_width=line_width,
                              cmap=cmap,
                              colorbar=False # Explicitly disable colorbar for main plot too
-                             )
-
-    # Apply opts to the main plot, including range bounds and NO autorange
-    main_plot = base_main_plot.opts(
-            title=data_container.name,
+                             ).opts(
         show_grid=True,
-        # Remove autorange='y' as y-axis will be linked
             backend_opts={
             "x_range.bounds": (df['time'].min(), df['time'].max()),
             # Restore y_range.bounds
-            "y_range.bounds": (df[value_col_name].min() - df[value_col_name].std()*0.1, df[value_col_name].max() + df[value_col_name].std()*0.1)
+            "y_range.bounds": (df[value_col_name].min(), df[value_col_name].max())
         }
     )
 
-    # --- Create Minimap Plot (using rasterize=True, similar to docs) --- #
-    base_minimap = df.hvplot(x="time", y=value_col_name,
-                           height=minimap_height, width=width,
-                           responsive=False,
-                           rasterize=True, # Use rasterize for minimap as in docs
-                           padding=(0, 0.1),
-                           line_width=line_width, # Match line width potentially
-                           color='darkgrey', # Use a distinct color for minimap
-                           colorbar=False)
-    # Disable toolbar for minimap
-    minimap_plot = base_minimap.opts(toolbar=None, default_tools=[]) # Remove yticks=None, title='' for now
+    # --- Create Minimap --- #
+    minimap = df.hvplot(x='time', y=value_col_name,
+                        height=minimap_height,
+                        rasterize=True,
+                        # downsample=True,
+                        responsive=True, # Add responsive
+                        shared_axes=False,
+                        colorbar=False,
+                        line_width=line_width,
+                        padding=(0, 0.1),
+                        cmap=cmap).opts(toolbar='disable', height=minimap_height)
+        
+    link = RangeToolLink(minimap, main_plot, axes=["x", "y"])
+    
+    # Layout
+    layout = (main_plot + minimap).cols(1)
 
-    # --- Link Main Plot and Minimap (linking X and Y as in docs) --- #
-    range_link = RangeToolLink(minimap_plot, main_plot, axes=["x", "y"])
-
-    # --- Combine into Layout (remains the same) --- #
-    final_layout = (main_plot + minimap_plot).opts(shared_axes=False).cols(1)
-
-    return final_layout
+    return layout
 
 # Register the updated dynamic service (output type is still Layout)
 # Params spec might need adjustment if cmap is configurable
@@ -286,6 +308,205 @@ register_service(
         'minimap_height': {'type': 'integer', 'label': '导航图高度', 'default': 100},
         'line_width': {'type': 'float', 'label': '线宽', 'default': 1},
         # Consider adding cmap if needed
+    }
+)
+
+# --- REFACTORING with @pn.depends: Service returns pn.layout.Panel --- #
+
+def plot_timeseries_complex_layout(
+    data_container: TimeSeriesData,
+    line_width: float = 1,
+    cmap: list = ['darkblue']
+) -> pn.layout.Panel:
+    """
+    创建包含全局预览、日期滑块、区域导航和细节聚焦视图的 Panel 布局。
+    区域导航图的 X 轴范围由日期滑块动态控制，但不筛选数据。
+    """
+    if not isinstance(data_container, TimeSeriesData):
+        raise TypeError("输入必须是 TimeSeriesData 对象")
+
+    series = data_container.series
+    if series.empty:
+        return pn.pane.Alert(f"{data_container.name} (空数据)", alert_type='warning')
+
+    # Prepare DataFrame
+    series.index.name = 'time'
+    df = series.reset_index()
+    value_col_name = 'value'
+    if series.name:
+        df = df.rename(columns={series.name: value_col_name})
+    else:
+        if len(df.columns) == 2:
+            df.columns = ['time', value_col_name]
+        else:
+            raise ValueError(f"无法确定 '{data_container.name}' 的值列。")
+
+    min_date = df['time'].min()
+    max_date = df['time'].max()
+    # --- Calculate full value range for bounds --- #
+    if not df.empty and value_col_name in df.columns:
+        min_val = df[value_col_name].min()
+        max_val = df[value_col_name].max()
+    else:
+        min_val, max_val = None, None # Handle case of empty df or missing column
+
+    # --- 1. 全局预览图 (Static) ---
+    global_preview = df.hvplot(
+        x='time', y=value_col_name,
+        rasterize=True,
+        responsive=True, sizing_mode='stretch_width',
+        height=150,
+        shared_axes=False,
+        line_width=line_width,
+        cmap=cmap,
+        colorbar=False,
+    ).opts(
+        toolbar='disable',
+        yticks=None, ylabel=None,
+        xticks=None, xlabel=None,
+    )
+
+    # --- 2. 日期范围滑块 (Control Widget) ---
+    date_slider = pn.widgets.DateRangeSlider(
+        name='选择时间范围',
+        start=min_date,
+        end=max_date,
+        value=(min_date, max_date),
+        step=1,
+        sizing_mode='stretch_width',
+        margin=0
+    )
+
+    # --- 3. 创建交互式区域导航图 (通过 .interactive().pipe() 筛选数据) --- #
+
+    # 定义用于 pipe 的筛选函数
+    def filter_dataframe_by_date_range(df_to_filter, date_range):
+        print(f"Interactive pipe: Filtering DF for range: {date_range}") # Debug print
+        start_date, end_date = date_range
+        # Handle potential None or NaT (though slider usually provides dates)
+        if start_date is None: start_date = df_to_filter['time'].min().date() # Fallback
+        if end_date is None: end_date = df_to_filter['time'].max().date() # Fallback
+
+        try:
+            # --- Convert date objects to Timestamps for comparison --- #
+            # Convert start_date to Timestamp (start of the day)
+            start_ts = pd.Timestamp(start_date)
+            # Convert end_date to Timestamp (end of the day for inclusive range)
+            # Add one day and subtract a nanosecond, or set time to 23:59:59.999... to include the whole end day
+            end_ts = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+            # Alternative: end_ts = pd.Timestamp(end_date, hour=23, minute=59, second=59, microsecond=999999, nanosecond=999)
+
+            print(f"Converted Timestamps for comparison: {start_ts} to {end_ts}")
+
+            # Ensure start is not after end after conversion
+            if start_ts > end_ts:
+                start_ts = end_ts # Adjust if slider gives inverted range somehow
+
+            # --- Perform filtering using Timestamps --- #
+            filtered = df_to_filter[
+                (df_to_filter['time'] >= start_ts) & (df_to_filter['time'] <= end_ts)
+            ]
+
+            if filtered.empty:
+                print("Filtering resulted in empty DataFrame")
+                # Return an empty DataFrame with correct columns
+                return pd.DataFrame(columns=df_to_filter.columns)
+            return filtered
+        except Exception as e:
+            print(f"Error during filtering/conversion in pipe: {e}")
+            import traceback
+            traceback.print_exc() # Print full traceback for detailed error info
+            return pd.DataFrame(columns=df_to_filter.columns) # Return empty on error
+
+    # 创建交互式绘图对象
+    # 注意：部件 (date_slider) 会被 .interactive() 自动管理并显示
+    # 如果不希望自动显示，需要更复杂的布局控制 (interactive.widgets() / interactive.panel())
+    # 这里我们先用简单的方式，让它自动处理
+    interactive_area_nav = df.interactive(sizing_mode='stretch_width').pipe(
+        filter_dataframe_by_date_range,
+        date_range=date_slider # 将滑块的值绑定到函数的 date_range 参数
+    ).hvplot(
+        x='time', y=value_col_name,
+        rasterize=True, height=400, responsive=True,
+        shared_axes=False,
+        line_width=line_width, cmap=cmap, colorbar=False
+    ).opts(
+        show_grid=True,
+        tools=['hover'],
+        # xlim 会自动根据筛选后的数据调整，无需手动设置
+        title="区域导航 (交互式数据)",
+        # --- Add backend_opts to set interaction bounds --- #
+        backend_opts={
+            # Set x-axis interaction bounds to the full data range
+            "x_range.bounds": (min_date, max_date),
+            # Set y-axis interaction bounds to the full data range
+            "y_range.bounds": (min_val, max_val) if min_val is not None else None
+        }
+    )
+
+    # --- 4. 细节聚焦图 (Static - Shows Full Data) ---
+    # This plot remains static, showing the full dataset for context
+    detail_view_plot = df.hvplot(
+        x='time', y=value_col_name,
+        rasterize=True,
+        width=400, height=400, sizing_mode='fixed',
+        shared_axes=False, # Keep independent axes
+        line_width=line_width, cmap=cmap, colorbar=False
+    ).opts(
+        show_grid=True,
+        title="细节聚焦 (全数据)",
+        # Set xlim to show the full range initially and keep it static
+        xlim=(min_date, max_date)
+    )
+
+    # --- 5. Layout --- Build the desired structure explicitly
+    # .interactive() 通常会自己管理部件布局，但我们可以尝试显式控制
+    # 如果直接使用 interactive_area_nav，它可能包含滑块和图表
+    # 为了保持之前的布局结构，我们只放入图表部分 (panel)
+    # 注意：这可能需要 Panel 版本支持良好
+
+    # plots_row = pn.Row(
+    #     interactive_area_nav, # 这可能会包含滑块和图表
+    #     detail_view_plot,
+    #     sizing_mode='stretch_width'
+    # )
+    # final_layout = pn.Column(
+    #     global_preview,
+    #     # date_slider, # 可能被 interactive_area_nav 包含，暂时注释掉
+    #     plots_row,
+    #     sizing_mode='stretch_width'
+    # )
+
+    # --- 更精细的布局控制 (推荐) --- #
+    # 分开获取部件和绘图面板
+    area_nav_widgets = interactive_area_nav.widgets()
+    area_nav_panel = interactive_area_nav.panel()
+
+    plots_row = pn.Row(
+        area_nav_panel, # 只放入绘图面板
+        detail_view_plot,
+        sizing_mode='stretch_width'
+    )
+
+    final_layout = pn.Column(
+        global_preview,
+        date_slider,      # 显式放回我们的滑块控件
+        plots_row,
+        sizing_mode='stretch_width'
+    )
+
+
+    return final_layout
+
+# Register the service returning Panel layout
+register_service(
+    registry=VISUALIZERS,
+    name="Plot Time Series (Complex Layout - Interactive Pipe)", # Updated name
+    function=plot_timeseries_complex_layout,
+    input_type=TimeSeriesData,
+    output_type=pn.layout.Panel,
+    params_spec={
+        'line_width': {'type': 'float', 'label': '线宽', 'default': 1},
     }
 )
 

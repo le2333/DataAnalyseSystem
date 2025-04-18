@@ -37,12 +37,19 @@ class DataManager(param.Parameterized):
 
         # 确保 ID 唯一 (虽然 UUID 碰撞概率极低)
         while data_container.id in self._data_store:
+            # If ID exists (extremely unlikely), generate a new one
+            # Accessing protected member _id is necessary here
             data_container._id = str(uuid.uuid4())
 
         # 检查名称是否重复，如果重复则自动添加后缀
         original_name = data_container.name
+        if not original_name: # Ensure original name is not empty
+             data_container.name = f"Unnamed_{data_container.data_type}"
+             original_name = data_container.name
+             
         count = 1
-        while any(dc.name == data_container.name for dc in self._data_store.values()):
+        current_names = {dc.name for dc in self._data_store.values()}
+        while data_container.name in current_names:
             data_container.name = f"{original_name}_{count}"
             count += 1
 
@@ -52,7 +59,7 @@ class DataManager(param.Parameterized):
         new_store[data_container.id] = data_container
         self._data_store = new_store
 
-        self.param.trigger('_data_updated')
+        self._trigger_update() # Use helper method
         return data_container.id
 
     def get_data(self, data_id: str) -> Optional[SupportedData]:
@@ -70,7 +77,7 @@ class DataManager(param.Parameterized):
             new_store = self._data_store.copy()
             del new_store[data_id]
             self._data_store = new_store
-            self.param.trigger('_data_updated')
+            self._trigger_update() # Use helper method
             return True
         return False
 
@@ -99,28 +106,49 @@ class DataManager(param.Parameterized):
                 options.append((display_name, dc.id))
         return options
 
-    def get_summary_list(self) -> List[Dict]:
+    # Merge get_summary_list and list_data_summaries
+    def get_summary_list(self, filter_type: Optional[Type[SupportedData]] = None, sort_key: str = 'name') -> List[Dict]:
         """
-        获取所有数据容器的摘要信息列表，用于表格显示。
-        现在会包含不同类型的摘要。
+        获取所有（或过滤后的）数据容器的摘要信息列表，用于表格显示。
+
+        Args:
+            filter_type: (可选) 要包含的数据类型 (例如 TimeSeriesData)。
+            sort_key: (可选) 用于排序摘要的键 ('name' 或 'created_at')。
+
+        Returns:
+            一个包含每个数据对象摘要字典的列表。
         """
         summaries = []
-        # 按名称排序
-        sorted_items = sorted(self._data_store.values(), key=lambda dc: dc.name)
-        for dc in sorted_items:
-            try:
-                # 调用各自的 get_summary 方法
-                summary = dc.get_summary()
-                summaries.append(summary)
-            except Exception as e:
-                print(f"获取数据 '{dc.name}' ({dc.id}) 的摘要时出错: {e}")
-                # 添加一个错误条目，以便在 UI 中看到问题
-                summaries.append({
-                    'id': dc.id,
-                    'name': dc.name,
-                    'type': dc.data_type,
-                    'status': f'Error getting summary: {e}'
-                })
+        for dc in self._data_store.values():
+            # Apply filter
+            if filter_type is None or isinstance(dc, filter_type):
+                try:
+                    # 调用各自的 get_summary 方法
+                    summary = dc.get_summary()
+                    summaries.append(summary)
+                except Exception as e:
+                    print(f"获取数据 '{dc.name}' ({dc.id}) 的摘要时出错: {e}")
+                    # 添加一个错误条目，以便在 UI 中看到问题
+                    summaries.append({
+                        'id': dc.id,
+                        'name': dc.name,
+                        'type': dc.data_type if hasattr(dc, 'data_type') else 'Unknown',
+                        'status': f'Error getting summary: {e}',
+                        'created_at': dc.created_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(dc, 'created_at') else 'N/A'
+                    })
+
+        # Sort results
+        reverse_sort = True if sort_key == 'created_at' else False
+        try:
+            summaries.sort(key=lambda x: x.get(sort_key, None), reverse=reverse_sort)
+        except TypeError as e:
+             print(f"无法按键 '{sort_key}' 排序摘要: {e}")
+             # Fallback to sorting by name if primary sort key fails
+             try:
+                 summaries.sort(key=lambda x: x.get('name', ''))
+             except Exception as fallback_e:
+                 print(f"也无法按名称排序摘要: {fallback_e}")
+
         return summaries
 
     def update_name(self, data_id: str, new_name: str) -> bool:
@@ -132,29 +160,14 @@ class DataManager(param.Parameterized):
             if new_name in current_names:
                 print(f"警告: 名称 '{new_name}' 已被使用，无法重命名。")
                 return False
-            if new_name != data_object.name:
-                data_object.name = new_name
+            if new_name.strip() and new_name != data_object.name:
+                data_object.name = new_name.strip()
                 self._trigger_update() # 触发列表更新
-            return True
+                return True
+            elif not new_name.strip():
+                print("警告: 新名称不能为空。")
+                return False
         return False
-
-    def list_data_summaries(self, filter_type: Optional[Type[SupportedData]] = None) -> List[Dict]:
-        """
-        获取所有（或过滤后的）数据对象的摘要信息列表。
-
-        Args:
-            filter_type: (可选) 要包含的数据类型 (例如 TimeSeriesData)。
-
-        Returns:
-            一个包含每个数据对象摘要字典的列表。
-        """
-        summaries = []
-        for data_object in self._data_store.values():
-            if filter_type is None or isinstance(data_object, filter_type):
-                summaries.append(data_object.get_summary())
-        # 可以根据需要排序，例如按创建时间
-        summaries.sort(key=lambda x: x['created_at'], reverse=True)
-        return summaries
 
     def _generate_unique_name(self, base_name: str) -> str:
         """生成一个在当前数据存储中唯一的名称。"""
