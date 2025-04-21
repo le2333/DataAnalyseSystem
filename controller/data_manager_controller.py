@@ -16,7 +16,7 @@ class DataManagerController(param.Parameterized):
         view_instance = DataManagerView(data_manager=data_manager)
         super().__init__(data_manager=data_manager, view=view_instance, navigation_callback=navigation_callback, **params)
         if not self.navigation_callback:
-             print("Warning: DataManagerController initialized without a navigation_callback.")
+             print("警告: DataManagerController 初始化时未提供 navigation_callback。")
         self._bind_events()
 
     def _bind_events(self):
@@ -27,7 +27,7 @@ class DataManagerController(param.Parameterized):
         self.view.param.watch(self._handle_compare_request, 'compare_request')
         self.view.param.watch(self._handle_remove_request, 'remove_request')
 
-    # Handle remove request directly (no navigation)
+    # 直接处理删除请求 (无需导航)
     def _handle_remove_request(self, event):
         """处理删除请求。"""
         if not event.new or not self.view.selected_data_ids:
@@ -35,7 +35,7 @@ class DataManagerController(param.Parameterized):
         ids_to_remove = list(self.view.selected_data_ids)
         removed_count = 0
         errors = []
-        # Consider adding confirmation dialog here
+        # TODO: 在此添加确认对话框
         for data_id in ids_to_remove:
             data_obj = self.data_manager.get_data(data_id)
             name = data_obj.name if data_obj else f"ID {data_id[:8]}..."
@@ -44,65 +44,61 @@ class DataManagerController(param.Parameterized):
             else:
                 errors.append(name)
         if removed_count > 0:
-             try: pn.state.notifications.success(f"成功删除了 {removed_count} 个数据项。")
-             except: pass
+             # 尝试显示成功通知 (移除 try/except pass)
+             pn.state.notifications.success(f"成功删除了 {removed_count} 个数据项。")
         if errors:
-             try: pn.state.notifications.error(f"无法删除以下数据项: {', '.join(errors)}。")
-             except: pass
+             # 尝试显示错误通知 (移除 try/except pass)
+             pn.state.notifications.error(f"无法删除以下数据项: {', '.join(errors)}。")
 
-    # --- Navigation Callbacks --- #
+    # --- 导航回调相关方法 --- #
     def _invoke_navigation(self, view_name: str, params: Dict[str, Any]):
-        """Invokes the navigation_callback with the view name and parameters."""
+        """调用 navigation_callback 以导航到指定视图。"""
         if self.navigation_callback:
             try:
                  self.navigation_callback(view_name, **params)
             except Exception as e:
-                 print(f"Error invoking navigation callback: {e}")
+                 print(f"错误: 调用导航回调时出错: {e}")
         else:
-             print("Error: navigation_callback is not set in DataManagerController.")
+             print("错误: DataManagerController 中未设置 navigation_callback。")
 
-    # Add handler for load request
+    # 处理加载请求
     def _handle_load_request(self, event):
-        """Handles load request event and invokes navigation callback."""
+        """处理加载请求事件并调用导航回调。"""
         if event.new:
-             print(f"DataManagerController: Load request received.")
+             print(f"DataManagerController: 收到加载请求。")
              self._invoke_navigation('load', params={})
 
     def _handle_explore_request(self, event):
-        """Handles explore request event and invokes navigation callback."""
-        # Check if event was triggered (value is True)
+        """处理探索 (可视化单个) 请求事件并调用导航回调。"""
         if event.new:
             if self.view.selected_data_ids:
-                # Get the single ID from the view's state
                 data_id = self.view.selected_data_ids[0]
-                print(f"DataManagerController: Explore request for {data_id}")
-                self._invoke_navigation('explore', params={'data_id': data_id})
+                print(f"DataManagerController: 收到可视化请求 (单个): {data_id}")
+                # 导航到统一视图，传递单个 ID
+                self._invoke_navigation('visualize', params={'selected_ids': data_id})
             else:
-                 print("Warning: Explore request triggered but no data selected in view.")
+                 print("警告: 触发了可视化请求，但视图中未选择任何数据。")
 
     def _handle_process_request(self, event):
-        """Handles process request event and invokes navigation callback."""
-        # Check if event was triggered (value is True)
+        """处理处理请求事件并调用导航回调。"""
         if event.new:
             if self.view.selected_data_ids:
-                # Get the list of IDs from the view's state
                 selected_ids = list(self.view.selected_data_ids)
-                print(f"DataManagerController: Process request for {selected_ids}")
+                print(f"DataManagerController: 收到处理请求: {selected_ids}")
                 self._invoke_navigation('process', params={'selected_ids': selected_ids})
             else:
-                 print("Warning: Process request triggered but no data selected in view.")
+                 print("警告: 触发了处理请求，但视图中未选择任何数据。")
 
     def _handle_compare_request(self, event):
-        """Handles compare request event and invokes navigation callback."""
-        # Check if event was triggered (value is True)
+        """处理比较 (可视化多个) 请求事件并调用导航回调。"""
         if event.new:
             if self.view.selected_data_ids:
-                # Get the list of IDs from the view's state
                 selected_ids = list(self.view.selected_data_ids)
-                print(f"DataManagerController: Compare request for {selected_ids}")
-                self._invoke_navigation('compare', params={'selected_ids': selected_ids})
+                print(f"DataManagerController: 收到可视化请求 (多个): {selected_ids}")
+                # 导航到统一视图，传递 ID 列表
+                self._invoke_navigation('visualize', params={'selected_ids': selected_ids})
             else:
-                 print("Warning: Compare request triggered but no data selected in view.")
+                 print("警告: 触发了比较请求，但视图中未选择任何数据。")
 
     def get_view_panel(self) -> pn.layout.Panel:
         """返回此控制器管理的视图 Panel。"""

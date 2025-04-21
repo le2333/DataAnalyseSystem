@@ -1,156 +1,178 @@
 import param
 import panel as pn
 from model.data_manager import DataManager
-from model.data_container import DataContainer # For type hint
-from model.timeseries_data import TimeSeriesData
-from model.multidim_data import MultiDimData
+from model.data_container import DataContainer # 只导入基类
 from view.process_view import ProcessView
 from services.registry import PREPROCESSORS
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Type, Tuple
 import traceback
+from .base_service_controller import BaseServiceController # 导入基类
 
-class ProcessController(param.Parameterized):
-    """处理 ProcessView 的交互，调用预处理服务。"""
+class ProcessController(BaseServiceController):
+    """处理 ProcessView 的交互，调用预处理服务。继承自 BaseServiceController。"""
 
-    data_manager = param.Parameter(precedence=-1)
-    view = param.Parameter(precedence=-1)
+    # data_manager, view, is_processing 由基类提供
 
-    # 内部状态
-    is_processing = param.Boolean(default=False, precedence=-1)
+    # --- BaseServiceController 接口实现 ---
 
-    def __init__(self, data_manager: DataManager, **params):
-        view_instance = ProcessView(data_manager=data_manager)
-        super().__init__(data_manager=data_manager, view=view_instance, **params)
-        self._bind_events()
+    @property
+    def registry(self) -> dict:
+        return PREPROCESSORS
 
-    def _bind_events(self):
-        self.view.preprocess_button.on_click(self._handle_preprocess)
-
-    # 由 AppController 调用，设置视图中选定的数据
-    def set_selected_data(self, selected_ids: List[str]):
-        self.view.selected_data_ids = selected_ids
-
-    def _handle_preprocess(self, event):
-        if self.is_processing:
-            self.view.show_status("正在处理中，请稍候...", alert_type='warning')
-            return
-
+    def _get_config_from_view(self) -> Optional[Dict[str, Any]]:
         config = self.view.get_process_config()
         if not config:
             self.view.show_status("配置错误或未选择服务/数据。", alert_type='danger')
-            return
+            return None
+        if 'service_name' not in config or 'selected_data_ids' not in config or 'params' not in config:
+             self.view.show_status("视图返回的配置不完整。", alert_type='danger')
+             return None
+        return config
 
-        self.is_processing = True
-        self.view.preprocess_button.loading = True
-        self.view.hide_status() # 清除旧状态
+    def _get_service_button(self) -> Optional[pn.widgets.Button]:
+        return getattr(self.view, 'preprocess_button', None)
 
+    def _get_output_area(self) -> Optional[pn.layout.Panel]:
+        # 使用 preprocess_status 作为输出区域来显示消息
+        return getattr(self.view, 'preprocess_status', None)
+        
+    def _validate_list_input(self, service_name: str, selected_ids: List[str], input_type: Any) -> Tuple[bool, List[str], List[DataContainer]]:
+        """验证服务要求的列表输入。"""
+        data_containers_list = []
+        errors = []
+        valid = True
+        
+        for data_id in selected_ids:
+            dc = self.data_manager.get_data(data_id)
+            if not dc:
+                 errors.append(f"未找到 ID: {data_id}")
+                 valid = False
+                 continue
+            data_containers_list.append(dc)
+        
+        if valid and not data_containers_list:
+            errors.append("没有有效的输入数据可用于列表处理服务。")
+            valid = False
+            
+        return valid, errors, data_containers_list
+
+    def _validate_single_input(self, service_name: str, selected_ids: List[str], input_type: Type[DataContainer]) -> Tuple[bool, List[str], Optional[DataContainer]]:
+        """验证服务要求的单个输入。"""
+        data_container = None
+        errors = []
+        valid = True
+        
+        if len(selected_ids) != 1:
+             errors.append(f"服务 '{service_name}' 一次只能处理一个数据项，但选择了 {len(selected_ids)} 个。")
+             valid = False
+        else:
+             data_id = selected_ids[0]
+             data_container = self.data_manager.get_data(data_id)
+             if not data_container:
+                 errors.append(f"未找到 ID {data_id}")
+                 valid = False
+                 
+        return valid, errors, data_container
+
+    def _validate_config_and_get_payload(self, config: Dict, service_info: Dict) -> tuple[bool, Dict[str, Any]]:
+        """验证预处理配置和数据，准备 payload。"""
         service_name = config['service_name']
         selected_ids = config['selected_data_ids']
-        params = config['params']
+        input_type = service_info.get('input_type')
+        accepts_list_flag = service_info.get('accepts_list', False)
+        
+        default_list_param = 'data_containers'
+        default_single_param = 'data_container'
+        input_param_name = service_info.get('input_param_name', 
+                                         default_list_param if accepts_list_flag else default_single_param)
 
-        service_info = PREPROCESSORS.get(service_name)
-        if not service_info:
-            self._show_error_and_reset(f"未找到服务: {service_name}")
-            return
+        payload = {}
+        errors = []
 
-        service_func = service_info['function']
-        input_type = service_info.get('input_type') # 可能为 None
-        accepts_list_flag = service_info.get('accepts_list', False) # Get the flag
-
-        try:
-            # --- 处理接受列表输入的服务 --- #
+        if not selected_ids:
+            errors.append("未选择要处理的数据项。")
+        else:
+            valid = False # 初始化为 False
             if accepts_list_flag:
-                # 验证输入类型 (假设服务文档或 input_type 提供了预期类型)
-                # 这里我们仍然硬编码检查 TimeSeriesData，因为该服务特定需要它
-                # 更通用的方法可能需要更丰富的类型系统或服务元数据
-                data_containers_list = []
-                valid = True
-                for data_id in selected_ids:
-                    dc = self.data_manager.get_data(data_id)
-                    if not isinstance(dc, TimeSeriesData):
-                        self._show_error_and_reset(f"'{service_name}' 要求所有输入都是时间序列数据，但 '{dc.name}' ({dc.data_type}) 不是。")
-                        valid = False
-                        break
-                    data_containers_list.append(dc)
-                if not valid:
-                    return
+                valid, list_errors, data_list = self._validate_list_input(service_name, selected_ids, input_type)
+                errors.extend(list_errors)
+                if valid:
+                    payload[input_param_name] = data_list
+            
+            elif input_type and isinstance(input_type, type) and issubclass(input_type, DataContainer):
+                valid, single_errors, data_single = self._validate_single_input(service_name, selected_ids, input_type)
+                errors.extend(single_errors)
+                if valid:
+                    payload[input_param_name] = data_single
+            
+            elif not accepts_list_flag: 
+                 errors.append(f"服务 '{service_name}' 的输入配置无效：期望单个 DataContainer 输入，但注册信息不匹配 ({input_type})。")
 
-                # 调用服务，传递列表和从 params 获取的额外参数
-                # 服务的第一个参数预期是列表 (e.g., data_containers=...)
-                # 我们需要知道参数名，假设是 'data_containers'
-                # 更健壮的方式是约定或从服务元数据获取参数名
-                payload = {'data_containers': data_containers_list}
-                result_data = service_func(**payload, **params)
+        if errors:
+            error_summary = "数据验证失败:\n" + "\n".join(f"- {e}" for e in errors)
+            self._handle_service_error(error_summary, service_name)
+            return False, {}
 
-                # 处理单个结果
-                if isinstance(result_data, DataContainer):
-                    new_id = self.data_manager.add_data(result_data)
-                    self.view.show_status(f"成功: 操作 '{service_name}' 完成。新数据 '{result_data.name}' ({new_id[:8]}) 已添加。", alert_type='success')
-                else:
-                     self.view.show_status(f"警告: '{service_name}' 未返回有效的数据容器。", alert_type='warning')
+        # 验证通过且 payload 已准备好
+        return True, payload
 
-            # --- 处理接受单个输入的标准服务 --- #
-            elif input_type and issubclass(input_type, DataContainer):
-                results_added = 0
-                errors_occurred = []
-                for data_id in selected_ids:
-                    data_container = self.data_manager.get_data(data_id)
-                    if not data_container:
-                        errors_occurred.append(f"跳过: 未找到 ID {data_id}")
-                        continue
-                    if not isinstance(data_container, input_type):
-                        errors_occurred.append(f"跳过: '{service_name}' 不适用于 '{data_container.name}' (类型 {data_container.data_type})，需要 {input_type.__name__}。")
-                        continue
-                    try:
-                        # 服务的第一个参数预期是单个对象 (e.g., data_container=...)
-                        # 假设参数名为 'data_container'
-                        payload = {'data_container': data_container}
-                        result_data = service_func(**payload, **params)
+    def _handle_service_result(self, result: Any, service_name: str, config: Dict):
+        """处理预处理服务的结果：添加新数据并显示状态。"""
+        results_added = 0
+        errors_occurred = []
+        new_data_info = []
 
-                        if isinstance(result_data, DataContainer):
-                            new_id = self.data_manager.add_data(result_data)
-                            results_added += 1
-                        else:
-                             errors_occurred.append(f"警告: '{service_name}' 应用于 '{data_container.name}' 后未返回有效数据容器。")
-                    except Exception as item_e:
-                        tb_str_item = traceback.format_exc()
-                        print(f"Error processing item {data_container.name} with {service_name}:\n{tb_str_item}")
-                        errors_occurred.append(f"错误: 应用 '{service_name}' 于 '{data_container.name}' 时失败: {item_e}")
+        # 服务可能返回单个 DataContainer 或列表
+        results_to_process = []
+        if isinstance(result, DataContainer):
+            results_to_process.append(result)
+        elif isinstance(result, list) and all(isinstance(item, DataContainer) for item in result):
+            results_to_process = result
+        elif result is not None:
+             # 如果服务返回了非 None 但不是预期类型的结果
+             errors_occurred.append(f"服务 '{service_name}' 返回了意外类型的结果: {type(result)}。")
 
-                # 显示最终状态
-                status_msg = f"处理完成。成功添加 {results_added} 个新数据项。"
-                if errors_occurred:
-                    status_msg += "\n发生以下问题:\n" + "\n".join(f"- {e}" for e in errors_occurred)
-                    self.view.show_status(status_msg, alert_type='warning')
-                elif results_added > 0:
-                    self.view.show_status(status_msg, alert_type='success')
-                else:
-                    self.view.show_status("没有数据被处理或添加（可能由于类型不匹配或处理失败）。", alert_type='info')
+        # 处理有效结果
+        for res_data in results_to_process:
+            try:
+                new_id = self.data_manager.add_data(res_data)
+                results_added += 1
+                new_data_info.append(f"- {res_data.name} (ID: {new_id[:8]})")
+            except Exception as add_e:
+                 errors_occurred.append(f"添加结果数据 '{getattr(res_data, 'name', '未知')}' 时出错: {add_e}")
 
-            # --- 处理 input_type 为 None 且 accepts_list 为 False 的情况 --- #
-            # (或者其他未明确处理的情况，例如服务期望原始类型如 DataFrame?)
-            else:
-                 # This case needs clarification: what kind of service fits here?
-                 # Maybe a service operating without specific DataContainer input?
-                 # Or a service whose input type wasn't registered correctly?
-                 self._show_error_and_reset(f"无法处理服务 '{service_name}'：输入类型定义不清晰或不受支持 ({input_type})。")
-                 return
+        # 显示最终状态
+        if results_added > 0:
+            status_msg = f"处理成功: 服务 '{service_name}' 完成。添加了 {results_added} 个新数据项:\n" + "\n".join(new_data_info)
+            alert_type = 'success'
+            if errors_occurred:
+                status_msg += "\n\n但也发生以下问题:\n" + "\n".join(f"- {e}" for e in errors_occurred)
+                alert_type = 'warning' # 部分成功
+            self.view.show_status(status_msg, alert_type=alert_type)
+        elif errors_occurred:
+             status_msg = f"处理失败: 服务 '{service_name}' 未成功添加任何数据。\n发生以下问题:\n" + "\n".join(f"- {e}" for e in errors_occurred)
+             self.view.show_status(status_msg, alert_type='danger')
+        else:
+             # 没有添加结果，也没有错误 (例如，服务没返回任何东西)
+             self.view.show_status(f"服务 '{service_name}' 执行完毕，但未添加任何新数据。", alert_type='info')
 
-        except Exception as e:
-            tb_str = traceback.format_exc()
-            print(f"Error during preprocessing service '{service_name}':\n{tb_str}")
-            self._show_error_and_reset(f"执行服务 '{service_name}' 时出错: {e}")
 
-        finally:
-            self.is_processing = False
-            self.view.preprocess_button.loading = False
+    # --- 特定于 ProcessController 的方法 ---
 
-    def _show_error_and_reset(self, message: str):
-        """显示错误消息并重置状态。"""
-        self.view.show_status(message, alert_type='danger')
-        self.is_processing = False
-        self.view.preprocess_button.loading = False
+    def __init__(self, data_manager: DataManager, **params):
+        # 实例化视图
+        view_instance = ProcessView(data_manager=data_manager)
+        # 调用基类初始化
+        super().__init__(data_manager=data_manager, view=view_instance, **params)
+        # _bind_button_event 已由基类处理
 
-    def get_view_panel(self) -> pn.layout.Panel:
-        """返回此控制器管理的视图 Panel。"""
-        return self.view.get_panel() 
+    # 由 AppController 调用，设置视图中选定的数据
+    def set_selected_data(self, selected_ids: List[str]):
+        # 直接更新视图的参数，视图的 watcher 会处理后续更新
+        self.view.selected_data_ids = selected_ids
+
+    # --- 移除的方法 (移至 BaseServiceController 或不再需要) ---
+    # _handle_preprocess -> 由基类 _handle_service_call_base 替代
+    # _bind_events -> 由基类处理
+    # _show_error_and_reset -> 由基类 _show_error_and_reset 替代
+    # get_view_panel -> 由基类 get_view_panel 替代 

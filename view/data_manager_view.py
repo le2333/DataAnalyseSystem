@@ -16,9 +16,8 @@ class DataManagerView(param.Parameterized):
     data_table = param.ClassSelector(class_=pn.widgets.Tabulator, is_instance=True)
     # Add Load button
     load_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
-    explore_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
     process_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
-    compare_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
+    visualize_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
     remove_button = param.ClassSelector(class_=pn.widgets.Button, is_instance=True)
 
     # 内部状态
@@ -26,9 +25,8 @@ class DataManagerView(param.Parameterized):
 
     # --- Events triggered by this view --- #
     load_request = param.Event(default=False) # Added event for loading
-    explore_request = param.Event(default=False)
     process_request = param.Event(default=False)
-    compare_request = param.Event(default=False)
+    visualize_request = param.Event(default=False)
     remove_request = param.Event(default=False)
 
     def __init__(self, data_manager: DataManager, **params):
@@ -53,16 +51,14 @@ class DataManagerView(param.Parameterized):
         # --- 操作按钮 --- #
         # Add Load Button definition
         self.load_button = pn.widgets.Button(name="数据加载...", button_type="primary", css_classes=['pn-button-primary']) # Always enabled
-        self.explore_button = pn.widgets.Button(name="探索数据", button_type="primary", disabled=True)
         self.process_button = pn.widgets.Button(name="数据处理...", button_type="success", disabled=True)
-        self.compare_button = pn.widgets.Button(name="可视化比较...", button_type="warning", disabled=True)
+        self.visualize_button = pn.widgets.Button(name="可视化...", button_type="warning", disabled=True)
         self.remove_button = pn.widgets.Button(name="删除选中", button_type="danger", disabled=True)
 
         # --- 绑定按钮点击事件到内部触发方法 --- #
         self.load_button.on_click(self._trigger_load)
-        self.explore_button.on_click(self._trigger_explore)
         self.process_button.on_click(self._trigger_process)
-        self.compare_button.on_click(self._trigger_compare)
+        self.visualize_button.on_click(self._trigger_visualize)
         self.remove_button.on_click(self._trigger_remove)
 
     @param.depends('data_manager._data_updated', watch=True)
@@ -111,27 +107,16 @@ class DataManagerView(param.Parameterized):
     def _update_button_states(self):
         """根据选择的数据更新按钮的可用状态。"""
         num_selected = len(self.selected_data_ids)
-        selected_types = set()
-        if num_selected > 0:
-            # Use list comprehension for potentially safer access
-            selected_types = {dc.data_type for sid in self.selected_data_ids if (dc := self.data_manager.get_data(sid))}
+        is_selection = num_selected > 0
 
-        is_single_selection = num_selected == 1
-        is_multi_selection = num_selected > 0
+        # Visualize button: Enabled if at least one item is selected
+        self.visualize_button.disabled = not is_selection
 
-        # 探索按钮: 仅当选中一个 (1D or MultiD) 时可用
-        is_explorable_type = TimeSeriesData.DATA_TYPE in selected_types or MultiDimData.DATA_TYPE in selected_types
-        self.explore_button.disabled = not (is_single_selection and is_explorable_type)
+        # Data Processing button: Enabled if at least one item is selected
+        self.process_button.disabled = not is_selection
 
-        # 数据处理按钮: 选中至少一个时可用
-        self.process_button.disabled = not is_multi_selection
-
-        # 可视化比较按钮: 选中多个同类型数据时可用
-        is_comparable = num_selected > 1 and len(selected_types) == 1
-        self.compare_button.disabled = not is_comparable
-
-        # 删除按钮: 选中至少一个时可用
-        self.remove_button.disabled = not is_multi_selection
+        # Remove button: Enabled if at least one item is selected
+        self.remove_button.disabled = not is_selection
         # Load button is always enabled
         # self.load_button.disabled = False 
 
@@ -140,20 +125,14 @@ class DataManagerView(param.Parameterized):
         """Triggers the load_request event."""
         self.load_request = True
 
-    def _trigger_explore(self, event):
-        if self.selected_data_ids:
-            # Trigger event with True, controller will get ID from view state
-            self.explore_request = True
-
     def _trigger_process(self, event):
         if self.selected_data_ids:
              # Trigger event with True, controller will get IDs from view state
             self.process_request = True
 
-    def _trigger_compare(self, event):
+    def _trigger_visualize(self, event):
         if self.selected_data_ids:
-             # Trigger event with True, controller will get IDs from view state
-            self.compare_request = True
+            self.visualize_request = True
 
     def _trigger_remove(self, event):
         if self.selected_data_ids:
@@ -165,9 +144,8 @@ class DataManagerView(param.Parameterized):
         # Add Load button to the button bar
         button_bar = pn.Row(
             self.load_button, # Add load button here
-            self.explore_button,
+            self.visualize_button,
             self.process_button,
-            self.compare_button,
             self.remove_button,
             sizing_mode='stretch_width'
         )

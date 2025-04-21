@@ -3,7 +3,10 @@ import param
 import pandas as pd
 
 class LoadInterface(param.Parameterized):
-    """封装数据加载相关的UI组件和布局"""
+    """封装数据加载相关的 UI 组件和布局。
+
+    提供文件选择、时间列选择、加载按钮和数据显示区域。
+    """
     
     # UI 组件
     file_selector = pn.widgets.FileSelector(
@@ -17,8 +20,12 @@ class LoadInterface(param.Parameterized):
     load_button = pn.widgets.Button(name='加载数据', button_type='primary')
     loaded_data_info_display = pn.pane.Markdown("", sizing_mode='stretch_width')
 
-    def get_panel(self):
-        """返回此UI单元的Panel布局"""
+    def get_panel(self) -> pn.Column:
+        """返回此 UI 单元的 Panel 布局。
+
+        Returns:
+            pn.Column: 包含加载相关控件的 Panel Column 布局。
+        """
         return pn.Column(
             pn.Row('## 数据加载', sizing_mode='stretch_width'),
             # 文件选择行
@@ -42,15 +49,19 @@ class LoadInterface(param.Parameterized):
         )
 
 class VisMainOptions(param.Parameterized):
-    """封装可视化主要选项（数据源、列、触发按钮）"""
+    """封装可视化主要选项，包括数据源选择、列选择和触发按钮。"""
     
     # UI 组件
     source_selector = pn.widgets.MultiSelect(name='选择数据源', options=[], sizing_mode='stretch_width')
     column_selector = pn.widgets.MultiSelect(name='选择要显示的列', options=[], sizing_mode='stretch_width')
     visualization_button = pn.widgets.Button(name='可视化', button_type='success')
 
-    def get_panel(self):
-        """返回此UI单元的Panel布局"""
+    def get_panel(self) -> pn.Column:
+        """返回此 UI 单元的 Panel 布局。
+
+        Returns:
+            pn.Column: 包含主要可视化选项控件的 Panel Column 布局。
+        """
         # 先简单组合，后续可在 get_visualization_interface 中放入Card
         return pn.Column(
             "选择数据源和列：",
@@ -60,21 +71,28 @@ class VisMainOptions(param.Parameterized):
             sizing_mode='stretch_width'
         )
         
-    def update_source_options(self, options):
-        """更新数据源选择器的选项"""
+    def update_source_options(self, options: list):
+        """更新数据源选择器的选项列表。
+
+        Args:
+            options (list): 新的数据源选项列表。
+        """
         self.source_selector.options = options
-        # 考虑是否需要重置 value
+        # 可选：如果需要，取消选中所有项
         # self.source_selector.value = [] 
 
-    def update_column_options(self, options):
-        """更新列选择器的选项"""
-        # 保留已选中的有效列
+    def update_column_options(self, options: list):
+        """更新列选择器的选项列表，并保留当前有效的选中项。
+
+        Args:
+            options (list): 新的列选项列表。
+        """
         current_selection = self.column_selector.value
         self.column_selector.options = options
         self.column_selector.value = [col for col in current_selection if col in options] 
 
 class VisRenderingOptions(param.Parameterized):
-    """封装可视化渲染相关的选项"""
+    """封装可视化渲染相关的选项，如渲染方式。"""
     
     rendering_method = pn.widgets.RadioButtonGroup(
         name='渲染方式', 
@@ -82,16 +100,26 @@ class VisRenderingOptions(param.Parameterized):
         value='自动'
     )
 
-    def get_panel(self):
-        """返回此UI单元的Panel布局"""
+    def get_panel(self) -> pn.Column:
+        """返回此 UI 单元的 Panel 布局。
+
+        Returns:
+            pn.Column: 包含渲染选项控件的 Panel Column 布局。
+        """
         return pn.Column(
             "渲染设置：",
             self.rendering_method,
             sizing_mode='stretch_width'
         )
         
-    def get_config(self):
-        """返回渲染配置字典"""
+    def get_config(self) -> dict:
+        """根据选择的渲染方式返回渲染配置字典。
+
+        Returns:
+            dict: 包含渲染配置的字典，目前主要是 'use_datashader' 键。
+                  'use_datashader' 为 True 表示使用 Datashader，
+                  为 False 表示使用 WebGL，为 None 表示自动选择。
+        """
         use_datashader = None
         if self.rendering_method.value == 'Datashader栅格化':
             use_datashader = True
@@ -103,7 +131,7 @@ class VisRenderingOptions(param.Parameterized):
         }
 
 class TimeAlignmentOptions(param.Parameterized):
-    """封装时间对齐相关的选项"""
+    """封装时间对齐相关的选项，包括启用、方法和频率。"""
     
     align_checkbox = pn.widgets.Checkbox(
         name='启用时间对齐', 
@@ -113,7 +141,7 @@ class TimeAlignmentOptions(param.Parameterized):
         name='对齐方法',
         options=['nearest', 'ffill', 'bfill', 'linear'],
         value='nearest',
-        disabled=True # 默认禁用
+        disabled=True # 默认禁用，直到复选框被勾选
     )
     align_freq = pn.widgets.Select(
         name='对齐频率',
@@ -124,13 +152,17 @@ class TimeAlignmentOptions(param.Parameterized):
 
     @param.depends('align_checkbox.value', watch=True)
     def _toggle_alignment_options(self):
-        """根据复选框状态启用/禁用对齐选项"""
+        """当启用复选框的值变化时，自动切换对齐方法和频率选择器的可用状态。"""
         is_enabled = self.align_checkbox.value
         self.align_method.disabled = not is_enabled
         self.align_freq.disabled = not is_enabled
 
-    def get_panel(self):
-        """返回此UI单元的Panel布局"""
+    def get_panel(self) -> pn.Column:
+        """返回此 UI 单元的 Panel 布局。
+
+        Returns:
+            pn.Column: 包含时间对齐选项控件的 Panel Column 布局。
+        """
         return pn.Column(
             "时间对齐设置：",
             pn.Row(self.align_checkbox),
@@ -139,8 +171,15 @@ class TimeAlignmentOptions(param.Parameterized):
             sizing_mode='stretch_width'
         )
         
-    def get_config(self):
-        """返回时间对齐配置字典"""
+    def get_config(self) -> dict:
+        """根据当前设置返回时间对齐的配置字典。
+
+        Returns:
+            dict: 包含时间对齐配置的字典。
+                  如果未启用，返回 {'enabled': False}。
+                  如果启用，返回 {'enabled': True, 'method': ..., 'freq': ...}。
+                  'freq' 为 None 表示使用原始频率。
+        """
         if not self.align_checkbox.value:
             return {'enabled': False}
             
@@ -151,7 +190,7 @@ class TimeAlignmentOptions(param.Parameterized):
         }
 
 class SourceTimeMappingDisplay(param.Parameterized):
-    """封装数据显示源时间列映射的Tabulator"""
+    """封装用于显示数据源与其时间列映射关系的 Tabulator 表格。"""
     
     source_time_mapping = pn.widgets.Tabulator(
             value=pd.DataFrame({'数据源': [], '时间列': []}),
@@ -161,12 +200,20 @@ class SourceTimeMappingDisplay(param.Parameterized):
             sizing_mode='stretch_width' 
     )
     
-    def update_mapping(self, data_frame):
-        """更新Tabulator的数据"""
+    def update_mapping(self, data_frame: pd.DataFrame):
+        """更新 Tabulator 显示的数据。
+
+        Args:
+            data_frame (pd.DataFrame): 包含 '数据源' 和 '时间列' 的 DataFrame。
+        """
         self.source_time_mapping.value = data_frame
         
-    def get_panel(self):
-        """返回此UI单元的Panel布局"""
+    def get_panel(self) -> pn.Column:
+        """返回此 UI 单元的 Panel 布局。
+
+        Returns:
+            pn.Column: 包含 Tabulator 表格的 Panel Column 布局。
+        """
         return pn.Column(
              "数据源时间列映射：",
              self.source_time_mapping,
