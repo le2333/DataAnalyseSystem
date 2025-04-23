@@ -7,13 +7,15 @@ from holoviews.plotting.links import RangeToolLink # 需要在这里导入
 from model.timeseries_data import TimeSeriesData
 from model.data_container import DataContainer # 用于类型提示
 from .registry import VISUALIZERS, register_service
-from typing import List, Tuple, Any # 导入 List
+from typing import List, Tuple, Any, Dict, Optional # 导入更多类型
 import pandas as pd # Import pandas
 import traceback # 用于调试
 from holoviews.operation.datashader import datashade
 from holoviews.streams import RangeX
 import datetime as dt # Import datetime
 import param # For reactive programming if needed
+import numpy as np # 导入numpy用于FFT计算
+from scipy import signal # 导入scipy.signal用于STFT
 
 # Helper class to bridge HoloViews stream and Panel parameter
 class PlotStateManager(param.Parameterized):
@@ -507,6 +509,633 @@ register_service(
     output_type=pn.layout.Panel,
     params_spec={
         'line_width': {'type': 'float', 'label': '线宽', 'default': 1},
+    }
+)
+
+# --- 频域分析服务：FFT (快速傅里叶变换) --- #
+
+def plot_fft_analysis(
+    data_container: TimeSeriesData,
+    width: int = 1500,
+    height: int = 500,
+    nfft: int = None,  # 可选参数，用于指定FFT点数
+    window: str = 'hann',  # 窗函数类型
+    detrend: str = 'constant',  # 去趋势方法
+    scaling: str = 'spectrum',  # 频谱缩放方式：'spectrum'或'density'
+    log_scale: bool = True,  # 是否使用对数刻度
+    cutoff_freq: float = None,  # 可选的截止频率（Hz）
+) -> pn.layout.Panel:
+    """
+    对时间序列数据执行FFT分析并可视化频谱结果。
+    
+    Args:
+        data_container: 时间序列数据容器
+        width: 图表宽度（像素）
+        height: 图表高度（像素）
+        nfft: FFT点数，默认为数据长度的下一个2的幂
+        window: 窗函数类型（'hann', 'hamming', 'blackman', 'boxcar'等）
+        detrend: 去趋势方法（'constant'或'linear'）
+        scaling: 频谱缩放方式（'spectrum'或'density'）
+        log_scale: 是否使用对数刻度显示频谱幅值
+        cutoff_freq: 可选的截止频率，用于限制显示范围
+        
+    Returns:
+        包含频谱图和控制部件的Panel布局
+    """
+    if not isinstance(data_container, TimeSeriesData):
+        return pn.pane.Alert("输入必须是时间序列数据", alert_type='danger')
+        
+    series = data_container.series
+    if series.empty:
+        return pn.pane.Alert(f"{data_container.name} (空数据)", alert_type='warning')
+    
+    # 确保数据是等间隔的时间序列，计算采样率
+    try:
+        # 计算时间差的中位数作为采样周期
+        time_diffs = np.diff(series.index.astype(np.int64)) / 1e9  # 转换为秒
+        sampling_period = np.median(time_diffs)
+        fs = 1.0 / sampling_period  # 采样率（Hz）
+        
+        # 如果时间差变化超过一定百分比，发出警告
+        max_diff = np.max(time_diffs)
+        min_diff = np.min(time_diffs)
+        if max_diff > min_diff * 1.1:  # 允许10%的变化
+            irregularity_warning = pn.pane.Alert(
+                f"警告：时间序列采样不完全规律，可能影响FFT结果。采样率设为平均值 {fs:.2f} Hz", 
+                alert_type='warning'
+            )
+        else:
+            irregularity_warning = None
+    except Exception as e:
+        return pn.pane.Alert(f"计算采样率失败: {str(e)}", alert_type='danger')
+    
+    # 准备数据
+    values = series.values
+    
+    # 去除NaN值
+    values = values[~np.isnan(values)]
+    
+    if len(values) == 0:
+        return pn.pane.Alert("数据中没有有效值（非NaN）", alert_type='danger')
+    
+    # 设置FFT点数
+    if nfft is None:
+        nfft = int(2 ** np.ceil(np.log2(len(values))))
+    
+    # 应用窗函数
+    if window != 'boxcar':  # boxcar就是矩形窗，相当于不加窗
+        window_function = getattr(signal.windows, window)
+        window_values = window_function(len(values))
+        values = values * window_values
+    
+    # 去趋势
+    if detrend == 'constant':
+        values = values - np.mean(values)
+    elif detrend == 'linear':
+        values = signal.detrend(values)
+    
+    # 执行FFT
+    fft_result = np.fft.rfft(values, n=nfft)
+    
+    # 计算频率轴
+    freqs = np.fft.rfftfreq(nfft, d=sampling_period)
+    
+    # 计算幅值
+    if scaling == 'spectrum':
+        # 功率谱 = |FFT|²/n
+        magnitude = np.abs(fft_result) ** 2 / len(values)
+    else:  # 'density'
+        # 功率谱密度 = |FFT|²/(fs*n)
+        magnitude = np.abs(fft_result) ** 2 / (fs * len(values))
+    
+    # 截断到截止频率（如果指定）
+    if cutoff_freq is not None and cutoff_freq > 0:
+        valid_idx = freqs <= cutoff_freq
+        freqs = freqs[valid_idx]
+        magnitude = magnitude[valid_idx]
+    
+    # 创建频谱数据框
+    spectrum_df = pd.DataFrame({
+        'frequency': freqs,
+        'magnitude': magnitude
+    })
+    
+    # 创建频谱图
+    if log_scale:
+        # 对数刻度，避免log(0)
+        spectrum_df['magnitude'] = np.log10(spectrum_df['magnitude'] + 1e-10)
+        y_label = '幅值 (对数刻度)'
+    else:
+        y_label = '幅值'
+    
+    spectrum_plot = spectrum_df.hvplot(
+        x='frequency', 
+        y='magnitude',
+        xlabel='频率 (Hz)', 
+        ylabel=y_label,
+        title=f'{data_container.name} - 频谱分析',
+        height=height,
+        responsive=True,
+        rasterize=True,
+        line_width=1.5
+    )
+    
+    # 创建控制部件
+    window_selector = pn.widgets.Select(
+        name='窗函数',
+        options=['hann', 'hamming', 'blackman', 'boxcar', 'bartlett', 'flattop'],
+        value=window
+    )
+    
+    detrend_selector = pn.widgets.Select(
+        name='去趋势',
+        options=['constant', 'linear', 'none'],
+        value=detrend
+    )
+    
+    scaling_selector = pn.widgets.Select(
+        name='缩放',
+        options=['spectrum', 'density'],
+        value=scaling
+    )
+    
+    log_scale_toggle = pn.widgets.Checkbox(
+        name='对数刻度', 
+        value=log_scale
+    )
+    
+    cutoff_slider = pn.widgets.FloatSlider(
+        name='截止频率 (Hz)',
+        start=0.1,
+        end=fs/2,  # 奈奎斯特频率
+        step=0.1,
+        value=cutoff_freq if cutoff_freq is not None else fs/2
+    )
+    
+    nfft_slider = pn.widgets.IntSlider(
+        name='FFT点数',
+        start=2**8,
+        end=2**16,
+        step=2**8,
+        value=nfft
+    )
+    
+    # 创建交互式更新函数
+    @pn.depends(
+        window_selector, detrend_selector, scaling_selector, 
+        log_scale_toggle, cutoff_slider, nfft_slider
+    )
+    def update_plot(window, detrend, scaling, log_scale, cutoff_freq, nfft):
+        try:
+            values = series.values
+            # 去除NaN值
+            values = values[~np.isnan(values)]
+            
+            # 应用窗函数
+            if window != 'boxcar':
+                window_function = getattr(signal.windows, window)
+                window_values = window_function(len(values))
+                values = values * window_values
+            
+            # 去趋势
+            if detrend == 'constant':
+                values = values - np.mean(values)
+            elif detrend == 'linear':
+                values = signal.detrend(values)
+            
+            # 执行FFT
+            fft_result = np.fft.rfft(values, n=nfft)
+            freqs = np.fft.rfftfreq(nfft, d=sampling_period)
+            
+            # 计算幅值
+            if scaling == 'spectrum':
+                magnitude = np.abs(fft_result) ** 2 / len(values)
+            else:  # 'density'
+                magnitude = np.abs(fft_result) ** 2 / (fs * len(values))
+            
+            # 截断到截止频率
+            if cutoff_freq > 0:
+                valid_idx = freqs <= cutoff_freq
+                freqs = freqs[valid_idx]
+                magnitude = magnitude[valid_idx]
+            
+            # 创建频谱数据框
+            spectrum_df = pd.DataFrame({
+                'frequency': freqs,
+                'magnitude': magnitude
+            })
+            
+            # 创建频谱图
+            if log_scale:
+                spectrum_df['magnitude'] = np.log10(spectrum_df['magnitude'] + 1e-10)
+                y_label = '幅值 (对数刻度)'
+            else:
+                y_label = '幅值'
+            
+            return spectrum_df.hvplot(
+                x='frequency', 
+                y='magnitude',
+                xlabel='频率 (Hz)', 
+                ylabel=y_label,
+                title=f'{data_container.name} - 频谱分析',
+                height=height,
+                responsive=True,
+                line_width=1.5,
+                rasterize = True
+            )
+        except Exception as e:
+            return hv.Div(f"更新图表时出错: {str(e)}")
+    
+    # 创建布局
+    controls = pn.Column(
+        pn.pane.Markdown("## FFT参数设置"),
+        window_selector,
+        detrend_selector,
+        scaling_selector,
+        log_scale_toggle,
+        cutoff_slider,
+        nfft_slider,
+        sizing_mode='fixed',
+        width=250
+    )
+    
+    # 添加原始时间序列图表
+    time_plot = series.hvplot(
+        title=f'{data_container.name} - 时间序列',
+        height=height//2,
+        responsive=True,
+        rasterize=True,
+        line_width=1.5
+    )
+    
+    # 创建最终布局
+    tabs = pn.Tabs(
+        ('频谱图', pn.Row(controls, update_plot, sizing_mode='stretch_width')),
+        ('原始时间序列', time_plot)
+    )
+    
+    layout = pn.Column(
+        pn.pane.Markdown(f"# {data_container.name} - FFT频域分析"),
+        irregularity_warning if irregularity_warning else pn.pane.Markdown(f"采样率: {fs:.2f} Hz"),
+        tabs,
+        sizing_mode='stretch_width'
+    )
+    
+    return layout
+
+# 注册FFT分析服务
+register_service(
+    registry=VISUALIZERS,
+    name="FFT频域分析",
+    function=plot_fft_analysis,
+    input_type=TimeSeriesData,
+    output_type=pn.layout.Panel,
+    params_spec={
+        'window': {'type': 'string', 'label': '窗函数', 'default': 'hann'},
+        'detrend': {'type': 'string', 'label': '去趋势', 'default': 'constant'},
+        'scaling': {'type': 'string', 'label': '缩放', 'default': 'spectrum'},
+        'log_scale': {'type': 'boolean', 'label': '对数刻度', 'default': True},
+        'nfft': {'type': 'integer', 'label': 'FFT点数', 'default': None},
+        'cutoff_freq': {'type': 'float', 'label': '截止频率 (Hz)', 'default': None},
+    }
+)
+
+# --- 频域分析服务：STFT (短时傅里叶变换) --- #
+
+def plot_stft_analysis(
+    data_container: TimeSeriesData,
+    width: int = 1500,
+    height: int = 700,
+    nperseg: int = 256,  # 每个段的长度
+    noverlap: int = None,  # 重叠部分长度
+    nfft: int = None,  # FFT点数
+    window: str = 'hann',  # 窗函数类型
+    detrend: str = 'constant',  # 去趋势方法
+    scaling: str = 'spectrum',  # 频谱缩放方式
+    log_scale: bool = True,  # 是否使用对数刻度
+    cmap: str = 'viridis',  # 颜色映射
+    max_freq_percent: float = 100,  # 显示的最大频率百分比（相对于奈奎斯特频率）
+) -> pn.layout.Panel:
+    """
+    对时间序列数据执行短时傅里叶变换(STFT)分析并可视化时频谱结果。
+    
+    Args:
+        data_container: 时间序列数据容器
+        width: 图表宽度（像素）
+        height: 图表高度（像素）
+        nperseg: 每个段的长度
+        noverlap: 重叠部分长度，默认为nperseg//2
+        nfft: FFT点数，默认为nperseg
+        window: 窗函数类型
+        detrend: 去趋势方法
+        scaling: 频谱缩放方式
+        log_scale: 是否使用对数刻度
+        cmap: 颜色映射
+        max_freq_percent: 显示的最大频率百分比（相对于奈奎斯特频率）
+        
+    Returns:
+        包含时频谱图和控制部件的Panel布局
+    """
+    if not isinstance(data_container, TimeSeriesData):
+        return pn.pane.Alert("输入必须是时间序列数据", alert_type='danger')
+        
+    series = data_container.series
+    if series.empty:
+        return pn.pane.Alert(f"{data_container.name} (空数据)", alert_type='warning')
+    
+    # 计算采样率
+    try:
+        # 对于不规则时间序列，取中位数时间间隔作为采样周期
+        time_diffs = np.diff(series.index.astype(np.int64)) / 1e9  # 转换为秒
+        sampling_period = np.median(time_diffs)
+        fs = 1.0 / sampling_period  # 采样率（Hz）
+        
+        max_diff = np.max(time_diffs)
+        min_diff = np.min(time_diffs)
+        if max_diff > min_diff * 1.1:  # 允许10%的变化
+            irregularity_warning = pn.pane.Alert(
+                f"警告：时间序列采样不完全规律，可能影响STFT结果。采样率设为平均值 {fs:.2f} Hz", 
+                alert_type='warning'
+            )
+        else:
+            irregularity_warning = None
+    except Exception as e:
+        return pn.pane.Alert(f"计算采样率失败: {str(e)}", alert_type='danger')
+    
+    # 准备数据
+    values = series.values
+    
+    # 去除NaN值（线性插值替换）
+    nans = np.isnan(values)
+    if np.any(nans):
+        # 如果有NaN，用线性插值填充
+        x = np.arange(len(values))
+        values = pd.Series(values).interpolate(method='linear').fillna(method='bfill').fillna(method='ffill').values
+    
+    # 设置默认参数
+    if noverlap is None:
+        noverlap = nperseg // 2
+    
+    # 执行STFT
+    try:
+        f, t, Zxx = signal.stft(
+            values, fs=fs, nperseg=nperseg, noverlap=noverlap,
+            nfft=nfft, detrend=detrend, window=window,
+            scaling=scaling
+        )
+        
+        # 计算幅度
+        Sxx = np.abs(Zxx) ** 2
+        
+        # 应用对数缩放
+        if log_scale:
+            Sxx = np.log10(Sxx + 1e-10)
+        
+        # 限制显示的最大频率
+        max_freq = (fs / 2) * (max_freq_percent / 100)
+        freq_mask = f <= max_freq
+        f_display = f[freq_mask]
+        Sxx_display = Sxx[freq_mask, :]
+        
+        # 将计算结果转换为DataFrame用于hvplot
+        if Sxx_display.size == 0 or len(t) == 0 or len(f_display) == 0:
+            return pn.pane.Alert("STFT计算结果为空，无法绘制热图", alert_type='warning')
+        
+        # 创建时间和频率网格
+        T, F = np.meshgrid(t, f_display)
+        
+        # 扁平化数据用于DataFrame
+        df_stft = pd.DataFrame({
+            'time': T.flatten(),
+            'frequency': F.flatten(), # Ensure this name matches y='frequency'
+            'power': Sxx_display.flatten() # This will be the value dimension (vdim)
+        })
+        
+        # Ensure DataFrame is not empty before plotting
+        if df_stft.empty or df_stft['power'].isnull().any() or np.isinf(df_stft['power']).any():
+            # Print some debug info if problematic data exists
+            if df_stft.empty:
+                print("Debug: df_stft is empty.")
+            else:
+                print(f"Debug: NaNs in power: {df_stft['power'].isnull().any()}, Infs in power: {np.isinf(df_stft['power']).any()}")
+                # print(df_stft[df_stft['power'].isnull() | np.isinf(df_stft['power'])].head())
+            return hv.Div("生成的STFT DataFrame为空或包含无效值")
+        
+        # 创建基础热图
+        # Use HeatMap for columnar data instead of QuadMesh
+        stft_plot = hv.HeatMap(df_stft, kdims=['time', 'frequency'], vdims=['power']).opts(
+            title=f'{data_container.name} - 短时傅里叶变换(STFT)',
+            xlabel='时间 (秒)', ylabel='频率 (Hz)',
+            colorbar=True,
+            cmap=cmap,
+            height=height,
+            responsive=True,
+            # rasterize=True,
+            tools=['hover'], # Add hover tool
+            toolbar='above',
+            active_tools=['wheel_zoom']
+        )
+        # Note: HeatMap automatically aggregates data. If performance is an issue
+        # for very large datasets, datashading the HeatMap is still an option:
+        from holoviews.operation.datashader import datashade
+        stft_plot = datashade(stft_plot, cmap=cmap)
+        
+    except Exception as e:
+        traceback.print_exc()
+        return hv.Div(f"更新STFT图表时出错: {str(e)}")
+    
+    # 创建控制部件
+    window_selector = pn.widgets.Select(
+        name='窗函数',
+        options=['hann', 'hamming', 'blackman', 'boxcar', 'bartlett', 'flattop'],
+        value=window
+    )
+    
+    detrend_selector = pn.widgets.Select(
+        name='去趋势',
+        options=['constant', 'linear', 'none'],
+        value=detrend
+    )
+    
+    scaling_selector = pn.widgets.Select(
+        name='缩放',
+        options=['spectrum', 'density'],
+        value=scaling
+    )
+    
+    log_scale_toggle = pn.widgets.Checkbox(
+        name='对数刻度', 
+        value=log_scale
+    )
+    
+    cmap_selector = pn.widgets.Select(
+        name='颜色映射',
+        options=['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'jet', 'hot', 'cool'],
+        value=cmap
+    )
+    
+    nperseg_slider = pn.widgets.IntSlider(
+        name='段长度',
+        start=32,
+        end=2048,
+        step=32,
+        value=nperseg
+    )
+    
+    noverlap_slider = pn.widgets.IntSlider(
+        name='重叠长度',
+        start=0,
+        end=nperseg-1,
+        step=nperseg//16,
+        value=noverlap
+    )
+    
+    max_freq_slider = pn.widgets.FloatSlider(
+        name='最大频率(%)',
+        start=1,
+        end=100,
+        step=1,
+        value=max_freq_percent
+    )
+    
+    # 更新控件值依赖关系
+    @pn.depends(nperseg_slider, watch=True)
+    def update_noverlap_range(nperseg):
+        noverlap_slider.end = nperseg - 1
+        noverlap_slider.step = max(1, nperseg // 16)
+        noverlap_slider.value = min(noverlap_slider.value, nperseg - 1)
+    
+    # 创建交互式更新函数
+    @pn.depends(
+        window_selector, detrend_selector, scaling_selector, 
+        log_scale_toggle, cmap_selector, nperseg_slider, 
+        noverlap_slider, max_freq_slider
+    )
+    def update_stft_plot(window, detrend, scaling, log_scale, cmap, nperseg, noverlap, max_freq_percent):
+        try:
+            # 准备数据
+            values_clean = values
+            
+            # 执行STFT
+            f, t, Zxx = signal.stft(
+                values_clean, fs=fs, nperseg=nperseg, noverlap=noverlap,
+                nfft=None, detrend=detrend, window=window,
+                scaling=scaling
+            )
+            
+            # 计算幅度
+            Sxx = np.abs(Zxx) ** 2
+            
+            # 应用对数缩放
+            if log_scale:
+                Sxx = np.log10(Sxx + 1e-10)
+            
+            # 限制显示的最大频率
+            max_freq = (fs / 2) * (max_freq_percent / 100)
+            freq_mask = f <= max_freq
+            f_display = f[freq_mask]
+            Sxx_display = Sxx[freq_mask, :]
+            
+            # Check if results are empty after frequency filtering
+            if Sxx_display.size == 0 or len(t) == 0 or len(f_display) == 0:
+                return hv.Div("STFT结果在频率过滤后为空")
+            
+            # 创建时间和频率网格
+            T, F = np.meshgrid(t, f_display)
+            
+            # 扁平化数据用于DataFrame
+            df_stft = pd.DataFrame({
+                'time': T.flatten(),
+                'frequency': F.flatten(),
+                'power': Sxx_display.flatten()
+            })
+            
+            # Ensure DataFrame is not empty before plotting
+            if df_stft.empty or df_stft['power'].isnull().any() or np.isinf(df_stft['power']).any():
+                # Print some debug info if problematic data exists
+                if df_stft.empty:
+                    print("Debug: df_stft is empty.")
+                else:
+                    print(f"Debug: NaNs in power: {df_stft['power'].isnull().any()}, Infs in power: {np.isinf(df_stft['power']).any()}")
+                    # print(df_stft[df_stft['power'].isnull() | np.isinf(df_stft['power'])].head())
+                return hv.Div("生成的STFT DataFrame为空或包含无效值")
+            
+            # 创建热图 - *** 改用 hv.HeatMap ***
+            heatmap_plot = hv.HeatMap(df_stft, kdims=['time', 'frequency'], vdims=['power']).opts(
+                title=f'{data_container.name} - 短时傅里叶变换(STFT)',
+                xlabel='时间 (秒)', ylabel='频率 (Hz)',
+                colorbar=True,
+                cmap=cmap,
+                height=height,
+                responsive=True,
+                tools=['hover'], # Add hover tool
+                toolbar='above',
+                active_tools=['wheel_zoom']
+            )
+            # If rasterization is essential for performance, consider datashader explicitly:
+            from holoviews.operation.datashader import datashade
+            return datashade(heatmap_plot, cmap=cmap)
+            # return heatmap_plot
+            
+        except Exception as e:
+            traceback.print_exc()
+            return hv.Div(f"更新STFT图表时出错: {str(e)}")
+    
+    # 创建原始时间序列图表
+    time_plot = series.hvplot(
+        title=f'{data_container.name} - 时间序列',
+        height=height//2,
+        responsive=True,
+        rasterize=True,
+        line_width=1.5
+    )
+    
+    # 创建控制面板
+    controls = pn.Column(
+        pn.pane.Markdown("## STFT参数设置"),
+        nperseg_slider,
+        noverlap_slider,
+        window_selector,
+        detrend_selector,
+        scaling_selector,
+        log_scale_toggle,
+        cmap_selector,
+        max_freq_slider,
+        sizing_mode='fixed',
+        width=250
+    )
+    
+    # 创建最终布局
+    tabs = pn.Tabs(
+        ('时频谱图', pn.Row(controls, update_stft_plot, sizing_mode='stretch_width')),
+        ('原始时间序列', time_plot)
+    )
+    
+    layout = pn.Column(
+        pn.pane.Markdown(f"# {data_container.name} - STFT时频域分析"),
+        irregularity_warning if irregularity_warning else pn.pane.Markdown(f"采样率: {fs:.2f} Hz"),
+        tabs,
+        sizing_mode='stretch_width'
+    )
+    
+    return layout
+
+# 注册STFT分析服务
+register_service(
+    registry=VISUALIZERS,
+    name="STFT时频域分析",
+    function=plot_stft_analysis,
+    input_type=TimeSeriesData,
+    output_type=pn.layout.Panel,
+    params_spec={
+        'nperseg': {'type': 'integer', 'label': '段长度', 'default': 256},
+        'noverlap': {'type': 'integer', 'label': '重叠长度', 'default': None},
+        'window': {'type': 'string', 'label': '窗函数', 'default': 'hann'},
+        'detrend': {'type': 'string', 'label': '去趋势', 'default': 'constant'},
+        'scaling': {'type': 'string', 'label': '缩放', 'default': 'spectrum'},
+        'log_scale': {'type': 'boolean', 'label': '对数刻度', 'default': True},
+        'cmap': {'type': 'string', 'label': '颜色映射', 'default': 'viridis'},
+        'max_freq_percent': {'type': 'float', 'label': '最大频率百分比', 'default': 100},
     }
 )
 
