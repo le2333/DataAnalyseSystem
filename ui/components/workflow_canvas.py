@@ -44,7 +44,7 @@ class WorkflowCanvas(param.Parameterized):
     # Bokeh plot object
     _bokeh_plot = param.Parameter(precedence=-1)
     _graph_renderer = param.Parameter(precedence=-1)
-    _node_source = param.Parameter(default=ColumnDataSource({'index': [], 'x': [], 'y': [], 'label': [], 'color': [], 'size': [], 'type': [], 'params_str': []}), precedence=-1)
+    _node_source = param.Parameter(default=ColumnDataSource({'index': [], 'x': [], 'y': [], 'label': [], 'color': [], 'radius': [], 'type': [], 'params_str': []}), precedence=-1)
     _edge_source = param.Parameter(default=ColumnDataSource({'start': [], 'end': []}), precedence=-1)
 
     # Internal state for edge drawing, etc. (simplified)
@@ -145,7 +145,7 @@ class WorkflowCanvas(param.Parameterized):
             'type': [G.nodes[i].get('type', 'Unknown') for i in node_indices],
             'params_str': [str(self.workflow.get_node_params(i)) if i in self.workflow._nodes else '{}' for i in node_indices], # Safer access
             'color': [Spectral8[i % len(Spectral8)] for i in range(len(node_indices))], # Simple coloring
-            'size': [15] * len(node_indices) # Default size
+            'radius': [7.5] * len(node_indices) # Default radius
         }
         self._node_source.data = node_data
 
@@ -162,21 +162,28 @@ class WorkflowCanvas(param.Parameterized):
             # Create new renderer
             self._graph_renderer = GraphRenderer()
 
+            # *** Set layout provider before adding renderer to figure ***
+            self._graph_renderer.layout_provider = graph_layout
+
             # Configure node rendering glyphs
-            self._graph_renderer.node_renderer.glyph = Circle(size='size', fill_color='color', line_color="black", line_width=1)
-            self._graph_renderer.node_renderer.selection_glyph = Circle(size='size', fill_color='color', line_color="red", line_width=3)
-            self._graph_renderer.node_renderer.hover_glyph = Circle(size='size', fill_color='color', line_color="blue", line_width=2)
+            self._graph_renderer.node_renderer.glyph = Circle(radius='radius', fill_color='color', line_color="black", line_width=1)
+            self._graph_renderer.node_renderer.selection_glyph = Circle(radius='radius', fill_color='color', line_color="red", line_width=3)
+            self._graph_renderer.node_renderer.hover_glyph = Circle(radius='radius', fill_color='color', line_color="blue", line_width=2)
+            # Set node data source
+            self._graph_renderer.node_renderer.data_source.data = dict(self._node_source.data)
 
             # Configure edge rendering glyphs
             self._graph_renderer.edge_renderer.glyph = MultiLine(line_color="#CCCCCC", line_alpha=0.8, line_width=2)
             self._graph_renderer.edge_renderer.selection_glyph = MultiLine(line_color=Spectral8[0], line_width=3)
             self._graph_renderer.edge_renderer.hover_glyph = MultiLine(line_color=Spectral8[1], line_width=3)
+            # Set edge data source
+            self._graph_renderer.edge_renderer.data_source.data = dict(self._edge_source.data)
 
             # Set selection/inspection policies
             self._graph_renderer.selection_policy = NodesAndLinkedEdges()
             self._graph_renderer.inspection_policy = EdgesAndLinkedNodes()
 
-            # Add the new renderer to the figure
+            # *** Add the new renderer to the figure after configuration ***
             self._figure.renderers.append(self._graph_renderer)
 
             # --- Connect Tools to the NEW Renderer --- 
@@ -192,11 +199,10 @@ class WorkflowCanvas(param.Parameterized):
                 logger.debug("Event handlers registered for Tap and Node Patch.")
         else:
              logger.debug("Updating existing GraphRenderer.")
-
-        # --- Update Renderer Data Sources and Layout (always do this) ---
-        self._graph_renderer.node_renderer.data_source.data = self._node_source.data
-        self._graph_renderer.edge_renderer.data_source.data = self._edge_source.data
-        self._graph_renderer.layout_provider = graph_layout
+             # *** Update existing renderer's layout and data sources ***
+             self._graph_renderer.layout_provider = graph_layout
+             self._graph_renderer.node_renderer.data_source.data = dict(self._node_source.data)
+             self._graph_renderer.edge_renderer.data_source.data = dict(self._edge_source.data)
 
         # --- Adjust plot range if needed --- 
         if not preserve_range and node_indices:
@@ -223,79 +229,59 @@ class WorkflowCanvas(param.Parameterized):
 
     def _get_empty_node_data(self):
         """Returns an empty dictionary structure for the node source."""
-        return {'index': [], 'x': [], 'y': [], 'label': [], 'color': [], 'size': [], 'type': [], 'params_str': []}
+        return {'index': [], 'x': [], 'y': [], 'label': [], 'color': [], 'radius': [], 'type': [], 'params_str': []}
 
     def _handle_tap(self, event: Tap):
         """处理画布上的单击事件。"""
-        # Access selected indices via the node renderer's data source
+        if not self._graph_renderer: return # 防御性检查
         selected_indices = self._graph_renderer.node_renderer.data_source.selected.indices
         if selected_indices:
-            # Get the actual node ID from the source data using the selected index
-            tapped_node_index = selected_indices[-1] # Last selected
+            tapped_node_index = selected_indices[-1] # 最后选定的
             if tapped_node_index < len(self._node_source.data['index']):
                  node_id = self._node_source.data['index'][tapped_node_index]
-                 logger.info(f"Node tapped: {node_id}")
+                 logger.info(f"节点被点击: {node_id}")
                  self.selected_node_id = node_id
-                 # Reset edge drawing if a node is selected
                  self._edge_start_node = None
             else:
-                 logger.warning(f"Tap selected index {tapped_node_index} out of bounds for node data.")
+                 logger.warning(f"点击选择的索引 {tapped_node_index} 超出节点数据范围。")
                  self.selected_node_id = None
                  self._edge_start_node = None
         else:
-             # Clicked on empty space
-             logger.debug("Tap on empty canvas space.")
+             logger.debug("点击了空白画布区域。")
              if self.selected_node_id is not None:
-                  self.selected_node_id = None # Deselect if clicking empty space
-             self._edge_start_node = None # Cancel edge drawing
+                  self.selected_node_id = None # 如果点击空白区域则取消选择
+             self._edge_start_node = None # 取消边绘制
 
 
     def _handle_node_drag_patch(self, attr, old, new):
         """处理 PointDrawTool 或直接修改 node_source 导致的节点位置变化。"""
-        # This callback is triggered when self._node_source.data is modified.
-        # The 'new' object contains patch information [(index, {attr: new_value, ...}), ...]
-        # For PointDrawTool drag, attr is often 'x' or 'y'.
-        logger.debug(f"Node source patched: {attr} {new}")
-
+        logger.debug(f"节点源被修补: {attr} {new}")
         updated_nodes_in_workflow = False
-        # The patch format from PointDrawTool seems to be [(index, new_value), ...]
-        # for 'x' and 'y' attributes separately.
         if attr in ('x', 'y'):
             for index, new_coord in new:
                  if isinstance(index, int) and index < len(self._node_source.data['index']):
                      node_id = self._node_source.data['index'][index]
                      try:
-                         # Get current position from workflow (or default)
                          current_pos = self.workflow.get_node_position(node_id) or (0.0, 0.0)
-                         # Update the specific coordinate
                          new_x = new_coord if attr == 'x' else current_pos[0]
                          new_y = new_coord if attr == 'y' else current_pos[1]
                          new_pos_tuple = (new_x, new_y)
-                         
-                         # Avoid redundant updates if position hasn't actually changed much
-                         # (Floating point comparisons can be tricky)
                          if abs(new_pos_tuple[0] - current_pos[0]) > 1e-6 or abs(new_pos_tuple[1] - current_pos[1]) > 1e-6:
-                             logger.info(f"Node '{node_id}' dragged (via patch {attr}) to {new_pos_tuple}")
+                             logger.info(f"节点 '{node_id}' (通过补丁 {attr}) 拖拽到 {new_pos_tuple}")
                              self.workflow.update_node_position(node_id, new_pos_tuple)
                              updated_nodes_in_workflow = True
                          else:
-                             logger.debug(f"Node '{node_id}' drag patch ignored, position effectively unchanged.")
-                             
+                             logger.debug(f"节点 '{node_id}' 的拖拽补丁被忽略，位置几乎未变。")
                      except KeyError:
-                         logger.warning(f"Dragged node '{node_id}' not found in workflow graph during update.")
+                         logger.warning(f"更新时在工作流图中未找到被拖拽的节点 '{node_id}'。")
                      except Exception as e:
-                          logger.error(f"Error updating position for node '{node_id}' from patch: {e}")
+                          logger.error(f"从补丁更新节点 '{node_id}' 的位置时出错: {e}")
                  else:
-                      logger.warning(f"Node drag patch had invalid index: {index}")
-
-        # If positions were updated in the workflow, maybe trigger save or log
-        # if updated_nodes_in_workflow:
-        #    logger.info("Node positions updated in workflow due to drag.")
-
+                      logger.warning(f"节点拖拽补丁的索引无效: {index}")
 
     # --- Methods for external control --- 
     def update_node_style(self, node_id: str, **style_props):
-         """尝试更新单个节点的样式 (颜色, 大小等)。"""
+         """尝试更新单个节点的样式 (颜色, 半径等)。"""
          if not self._node_source or 'index' not in self._node_source.data:
               logger.warning("Cannot update style, node source is not ready.")
               return

@@ -10,9 +10,11 @@ import json
 # Assuming running via main.py from the root directory
 from core.workflow import Workflow, WorkflowRunner
 from core.node import NodeRegistry
-from ui.components.node_palette import NodePalette
-from ui.components.node_config import NodeConfigPanel
-from ui.components.workflow_canvas import WorkflowCanvas
+# 不再直接依赖子组件，而是依赖编辑器视图
+# from ui.components.node_palette import NodePalette
+# from ui.components.config_editor import ConfigEditor
+# from ui.components.workflow_visualizer import WorkflowVisualizer
+from ui.views.workflow_editor_view import WorkflowEditorView # 导入编辑器视图
 
 
 pn.extension(notifications=True) # Enable notifications for user feedback
@@ -21,146 +23,137 @@ logger = logging.getLogger(__name__)
 
 class MainView(param.Parameterized):
     """
-    主应用程序视图，整合所有 UI 组件和核心逻辑。
+    应用程序的主框架视图。
+    管理顶层布局（如标签页、工具栏），并包含具体功能视图（如工作流编辑器）。
     """
 
     # --- Core Objects ---
-    # 定义 Parameter，但不在此处设置复杂的默认实例
-    workflow = param.Parameter(default=None, constant=False)
-    runner = param.Parameter(default=None, constant=False)
+    # MainView 持有当前活动的工作流实例
+    workflow = param.ClassSelector(class_=Workflow)
+    runner = param.ClassSelector(class_=WorkflowRunner)
 
-    # --- UI Components / Widgets ---
-    # 定义为实例属性，在 __init__ 中创建
+    # --- Views/Pages (as Tabs) ---
+    # 实例化子视图
+    workflow_editor: WorkflowEditorView = None
 
-    # --- Status Text ---
+    # --- UI Components / Widgets (Toolbar) ---
+    run_button = param.Parameter()
+    save_button = param.Parameter()
+    load_button = param.Parameter()
+    clear_button = param.Parameter()
+    delete_node_button = param.Parameter()
+    file_input = param.Parameter()
     status_text = param.Parameter(default=pn.pane.Markdown("状态：就绪", align='center'))
 
-
     def __init__(self, **params):
+        """
+        初始化 MainView 框架。
+        """
         # --- Set default core objects BEFORE super().__init__ ---
-        # Check if workflow/runner were passed in params, otherwise use default
         if 'workflow' not in params:
             params['workflow'] = Workflow(name="New Workflow")
         if 'runner' not in params:
             params['runner'] = WorkflowRunner()
-            
-        # --- Initialize Components and Widgets ---
-        # 这些是视图的组成部分，不是配置参数，所以设为普通实例属性
-        self.node_palette = NodePalette()
-        self.node_config = NodeConfigPanel()
-        self.workflow_canvas = WorkflowCanvas()
 
-        self.run_button = pn.widgets.Button(name="▶️ 运行", button_type="success", width=80, align='center')
-        self.save_button = pn.widgets.Button(name="💾 保存", button_type="primary", width=80, align='center')
-        self.load_button = pn.widgets.Button(name="📂 加载", button_type="default", width=80, align='center')
-        self.clear_button = pn.widgets.Button(name="🗑️ 清空", button_type="danger", width=80, align='center')
+        # --- Initialize Components and Widgets (Toolbar) ---
+        self.run_button = pn.widgets.Button(name="▶️ 运行工作流", button_type="success", width=120, align='center')
+        self.save_button = pn.widgets.Button(name="💾 保存工作流", button_type="primary", width=120, align='center')
+        self.load_button = pn.widgets.Button(name="📂 加载工作流", button_type="default", width=120, align='center')
+        self.clear_button = pn.widgets.Button(name="🗑️ 清空工作流", button_type="danger", width=120, align='center')
         self.delete_node_button = pn.widgets.Button(name="❌ 删除选中节点", button_type="warning", width=150, align='center', disabled=True)
         self.file_input = pn.widgets.FileInput(accept=".json", multiple=False, visible=False)
-
-        # --- Call super().__init__ AFTER defaults are set and components initialized ---
-        # This assigns workflow and runner from params (either passed in or default)
-        # to self.workflow and self.runner via param magic.
+        
+        # --- Instantiate Sub-Views ---
+        # 将 MainView 持有的 workflow 实例传递给编辑器
+        self.workflow_editor = WorkflowEditorView(workflow=params['workflow'])
+        
+        # --- Call super().__init__ ---
         super().__init__(**params)
 
-        # --- Connect Components (using self.workflow which is now set) ---
-        self.node_config.workflow = self.workflow
-        self.workflow_canvas.workflow = self.workflow
-
-        # --- Bind Interactions ---
-        self.node_palette.param.watch(self._add_node_from_palette, 'selected_node_type')
-        self.workflow_canvas.param.watch(self._update_config_on_selection, 'selected_node_id')
+        # --- Bind Toolbar Interactions ---
         self.run_button.on_click(self._run_workflow)
         self.save_button.on_click(self._trigger_save_workflow)
         self.load_button.on_click(self._trigger_load_workflow)
         self.clear_button.on_click(self._clear_workflow)
-        self.delete_node_button.on_click(self._delete_selected_node)
+        self.delete_node_button.on_click(self._delete_selected_node) # 需要访问编辑器的选中状态
         self.file_input.param.watch(self._handle_load_workflow, 'value')
+        
+        # --- Watch for changes that affect the toolbar ---
+        # 监听编辑器视图的选中节点，以启用/禁用删除按钮
+        self.workflow_editor.param.watch(self._update_delete_button_state, 'selected_node_id')
+        # 监听工作流替换事件，以确保编辑器视图使用新的实例
+        self.param.watch(self._handle_workflow_replacement, 'workflow')
+        # 初始化删除按钮状态
+        self._update_delete_button_state()
 
-        # --- Watch for workflow replacement ---
-        self.param.watch(self._on_workflow_replace, 'workflow')
-
-    # --- Interaction Handlers (remain mostly the same) ---
-
-    def _on_workflow_replace(self, event: param.parameterized.Event):
-        """当 self.workflow 参数被新实例替换时调用。"""
-        logger.info(f"Workflow instance replaced. Updating child components. New workflow: {event.new.name}")
-        # Make sure child components reference the *new* workflow object
-        self.node_config.workflow = event.new
-        self.workflow_canvas.workflow = event.new # This should trigger canvas redraw via its own watch
-        # Explicitly clear selection/config related to the old workflow
-        self.workflow_canvas.selected_node_id = None
-        # Config panel update is triggered by selected_node_id change above
-        self.delete_node_button.disabled = True
-
-
-    def _add_node_from_palette(self, event: param.parameterized.Event):
-        """当 NodePalette 中选择一个节点类型时调用。"""
-        if event.new:
-            node_type = event.new
-            logger.info(f"接收到添加节点请求: {node_type}")
-            try:
-                node_id = f"{node_type.lower()}_{uuid.uuid4().hex[:6]}"
-                position = (0.0, 0.0) # Simplify position for now
-                # Directly modify the *current* workflow instance
-                self.workflow.add_node(node_id=node_id, node_type=node_type, position=position)
-                logger.info(f"节点 '{node_id}' ({node_type}) 已添加到工作流。")
-                # Explicitly tell canvas to redraw because internal graph changed
-                self.workflow_canvas.redraw(preserve_range=True)
-                pn.state.notifications.success(f"已添加节点: {node_type}", duration=2000)
-            except Exception as e:
-                logger.error(f"添加节点 {node_type} 失败: {e}", exc_info=True)
-                pn.state.notifications.error(f"添加节点失败: {e}", duration=4000)
-            finally:
-                self.node_palette.selected_node_type = None
-
-    def _update_config_on_selection(self, event: param.parameterized.Event):
-        """当 WorkflowCanvas 中的 selected_node_id 改变时调用。"""
-        new_node_id = event.new
-        logger.debug(f"画布选择节点: {new_node_id}")
-        # Pass the selection to the config panel
-        self.node_config.selected_node_id = new_node_id
-        # Enable/disable delete button
-        self.delete_node_button.disabled = (new_node_id is None)
+    # --- Toolbar Action Handlers ---
+    
+    def _update_delete_button_state(self, event=None):
+         """根据编辑器视图的选中状态更新删除按钮。"""
+         selected_id = self.workflow_editor.selected_node_id
+         self.delete_node_button.disabled = (selected_id is None)
 
     def _run_workflow(self, event):
-        """运行当前工作流。"""
+        """运行当前工作流 (由 MainView 持有)。"""
         logger.info("触发工作流运行...")
         self.status_text.object = "状态：正在运行..."
         self.run_button.loading = True
         try:
-            self.runner.run(self.workflow) # Use the runner instance
+            if not self.workflow:
+                raise ValueError("工作流未初始化")
+            if not self.runner:
+                 self.runner = WorkflowRunner() # 确保 runner 存在
+            self.runner.run(self.workflow)
             logger.info(f"工作流 '{self.workflow.name}' 执行调用完成。")
             self.status_text.object = "状态：运行完成 (请查看日志)"
-            pn.state.notifications.success("工作流运行流程已完成。", duration=3000)
+            if pn.state.notifications:
+                pn.state.notifications.success("工作流运行流程已完成。", duration=3000)
         except Exception as e:
-            logger.error(f"运行工作流 '{self.workflow.name}' 失败: {e}", exc_info=True)
+            logger.error(f"运行工作流失败: {e}", exc_info=True)
             self.status_text.object = f"状态：运行失败 - {e}"
-            pn.state.notifications.error(f"运行工作流失败: {e}", duration=5000)
+            if pn.state.notifications:
+                pn.state.notifications.error(f"运行工作流失败: {e}", duration=5000)
         finally:
             self.run_button.loading = False
 
     def _trigger_save_workflow(self, event):
-        """准备保存工作流并触发下载。"""
+        """准备保存当前工作流并触发下载。"""
         logger.info("触发保存工作流...")
+        if not self.workflow:
+             logger.warning("无法保存，工作流为空。")
+             if pn.state.notifications:
+                 pn.state.notifications.warning("工作流为空，无法保存。", duration=3000)
+             return
         try:
             workflow_json = self.workflow.serialize()
             file_name = f"{self.workflow.name.replace(' ', '_').replace('/', '_')}.json"
-            pn.state.download(data=workflow_json, filename=file_name, mime_type="application/json")
-            logger.info(f"工作流已准备下载为 {file_name}")
-            pn.state.notifications.info("工作流文件已开始下载。", duration=3000)
+            if hasattr(pn.state, 'download'):
+                 pn.state.download(data=workflow_json, filename=file_name, mime_type="application/json")
+                 logger.info(f"工作流已准备下载为 {file_name}")
+                 if pn.state.notifications:
+                    pn.state.notifications.info("工作流文件已开始下载。", duration=3000)
+            else:
+                 logger.warning("pn.state.download 不可用，无法直接触发下载。")
+                 # 可以在 UI 中显示一个下载链接
+                 # download_link = pn.pane.HTML(f'<a href="data:application/json;charset=utf-8,{workflow_json}" download="{file_name}">点击下载 {file_name}</a>')
+                 # self.status_text.object = download_link # 或者添加到其他地方
+                 if pn.state.notifications:
+                     pn.state.notifications.warning("无法自动下载，请检查浏览器设置或联系管理员。", duration=4000)
+
         except Exception as e:
             logger.error(f"序列化或准备下载工作流失败: {e}", exc_info=True)
-            pn.state.notifications.error(f"保存工作流失败: {e}", duration=4000)
+            if pn.state.notifications:
+                pn.state.notifications.error(f"保存工作流失败: {e}", duration=4000)
 
     def _trigger_load_workflow(self, event):
         """点击加载按钮 - 使文件输入可见。"""
         logger.info("触发加载工作流文件选择...")
-        pn.state.notifications.info("请使用文件选择器加载工作流文件 (.json)。", duration=4000)
-        # Make the file input visible so the user can interact
+        if pn.state.notifications:
+            pn.state.notifications.info("请使用文件选择器加载工作流文件 (.json)。", duration=4000)
         self.file_input.visible = True
 
     def _handle_load_workflow(self, event: param.parameterized.Event):
-        """当 FileInput 的 value 改变时（即文件被选择）调用。"""
+        """当 FileInput 的 value 改变时调用。"""
         if event.new:
             file_content_bytes = event.new
             filename = self.file_input.filename or "unknown.json"
@@ -169,62 +162,80 @@ class MainView(param.Parameterized):
             try:
                 json_data = file_content_bytes.decode('utf-8')
                 new_workflow = Workflow.deserialize(json_data)
-                # Replace the current workflow object instance.
-                # This will trigger the _on_workflow_replace watcher.
-                self.workflow = new_workflow
-                logger.info(f"工作流 '{new_workflow.name}' 已成功加载并替换当前工作流。")
+                # 替换 MainView 持有的 workflow 实例
+                # 这会触发 _handle_workflow_replacement
+                self.workflow = new_workflow 
+                logger.info(f"工作流 '{new_workflow.name}' 已成功加载。")
                 self.status_text.object = f"状态：加载成功 - {new_workflow.name}"
-                pn.state.notifications.success(f"工作流 '{new_workflow.name}' 已加载。", duration=3000)
-
+                if pn.state.notifications:
+                    pn.state.notifications.success(f"工作流 '{new_workflow.name}' 已加载。", duration=3000)
             except json.JSONDecodeError as e:
                  logger.error(f"加载工作流失败：无效的 JSON 文件 '{filename}'. {e}")
                  self.status_text.object = "状态：加载失败 - 无效的JSON"
-                 pn.state.notifications.error(f"加载失败：无效的JSON文件 '{filename}'。", duration=4000)
+                 if pn.state.notifications:
+                     pn.state.notifications.error(f"加载失败：无效的JSON文件 '{filename}'。", duration=4000)
             except Exception as e:
                 logger.error(f"加载工作流 '{filename}' 失败: {e}", exc_info=True)
                 self.status_text.object = f"状态：加载失败 - {e}"
-                pn.state.notifications.error(f"加载工作流失败: {e}", duration=4000)
+                if pn.state.notifications:
+                    pn.state.notifications.error(f"加载工作流失败: {e}", duration=4000)
             finally:
-                # Reset and hide the file input regardless of success/failure
+                # 重置 FileInput
                 self.file_input.value = None
                 self.file_input.filename = None
                 self.file_input.visible = False
-
+                
+    def _handle_workflow_replacement(self, event: param.parameterized.Event):
+        """当 self.workflow 被新实例替换时，确保子视图也更新。"""
+        logger.info(f"MainView workflow replaced. Updating editor view.")
+        new_workflow = event.new
+        if self.workflow_editor.workflow is not new_workflow:
+             self.workflow_editor.workflow = new_workflow
+        # 可能需要重置编辑器视图的选中状态
+        if self.workflow_editor.selected_node_id is not None:
+             self.workflow_editor.selected_node_id = None
 
     def _clear_workflow(self, event):
         """清空当前工作流。"""
         logger.info("触发清空工作流...")
         try:
-            # Create a new empty workflow instance and replace the old one.
-            # This will trigger the _on_workflow_replace watcher.
-            self.workflow = Workflow(name="New Workflow")
+            # 创建新实例并替换，触发 _handle_workflow_replacement
+            self.workflow = Workflow(name="New Workflow") 
             logger.info("工作流已清空。")
             self.status_text.object = "状态：工作流已清空"
-            pn.state.notifications.info("工作流已清空。", duration=2000)
+            if pn.state.notifications:
+                pn.state.notifications.info("工作流已清空。", duration=2000)
         except Exception as e:
             logger.error(f"清空工作流时出错: {e}", exc_info=True)
-            pn.state.notifications.error(f"清空工作流失败: {e}", duration=4000)
+            if pn.state.notifications:
+                pn.state.notifications.error(f"清空工作流失败: {e}", duration=4000)
 
     def _delete_selected_node(self, event):
-        """删除画布上选中的节点。"""
-        node_id = self.workflow_canvas.selected_node_id
+        """删除编辑器视图中选中的节点。"""
+        node_id = self.workflow_editor.selected_node_id # 从编辑器获取 ID
         if node_id:
-            logger.info(f"触发删除节点: {node_id}")
+            logger.info(f"请求删除节点: {node_id}")
+            if not self.workflow:
+                 logger.warning("无法删除节点，工作流为空。")
+                 return
             try:
-                # Directly modify the *current* workflow instance
+                # 直接在 MainView 持有的 workflow 上操作
                 self.workflow.remove_node(node_id)
                 logger.info(f"节点 '{node_id}' 已从工作流移除。")
-                # Clear selection and redraw
-                self.workflow_canvas.selected_node_id = None # This triggers config clear via watcher
-                # Explicitly redraw canvas after node removal
-                self.workflow_canvas.redraw()
-                pn.state.notifications.info(f"节点 '{node_id}' 已删除。", duration=2000)
+                # 清除编辑器的选择状态 (它应该会触发 MainView 的 watcher 更新按钮状态)
+                self.workflow_editor.selected_node_id = None 
+                # 触发 workflow 更新，让编辑器和其他组件知道变化
+                self.param.trigger('workflow') 
+                if pn.state.notifications:
+                    pn.state.notifications.info(f"节点 '{node_id}' 已删除。", duration=2000)
             except Exception as e:
                 logger.error(f"删除节点 '{node_id}' 失败: {e}", exc_info=True)
-                pn.state.notifications.error(f"删除节点失败: {e}", duration=4000)
+                if pn.state.notifications:
+                    pn.state.notifications.error(f"删除节点失败: {e}", duration=4000)
         else:
             logger.warning("尝试删除节点，但没有节点被选中。")
-            pn.state.notifications.warning("请先在画布上选择一个要删除的节点。", duration=3000)
+            if pn.state.notifications:
+                pn.state.notifications.warning("请先在画布上选择一个要删除的节点。", duration=3000)
 
     # --- Layout Definition ---
     def panel(self) -> pn.viewable.Viewable:
@@ -232,33 +243,33 @@ class MainView(param.Parameterized):
 
         toolbar = pn.Row(
             self.load_button,
-            self.file_input, # Keep FileInput visible in the toolbar layout
+            self.file_input,
             self.save_button,
             self.clear_button,
             self.run_button,
+            self.delete_node_button, # 删除按钮放回工具栏
             pn.layout.HSpacer(),
             self.status_text,
-            self.delete_node_button,
             height=60,
             styles={'background': '#f0f0f0', 'padding': '10px'}
         )
 
-        template = pn.template.FastListTemplate(
-            title="数据分析平台",
-            sidebar=[
-                self.node_palette.panel(),
-                pn.pane.HTML("<hr>"),
-                self.node_config.panel() # Config panel in the sidebar
-            ],
-            main=[
-                toolbar,
-                self.workflow_canvas.panel()
-            ],
-            sidebar_width=280,
-            accent_base_color="#4CAF50",
-            header_background="#388E3C",
+        # 使用 Tabs 组织不同的视图
+        tabs = pn.Tabs(
+            ('工作流编辑器', self.workflow_editor.panel()), # 第一个标签页是编辑器
+            # ('结果查看', pn.pane.Markdown("结果将在这里显示...")), # 示例：未来可以添加其他标签页
+            # ('仪表盘', pn.pane.Markdown("仪表盘..."))
+            dynamic=True, # 只有活跃的标签页会被渲染
+            sizing_mode='stretch_both'
         )
-        return template
+
+        layout = pn.Column(
+            toolbar,
+            tabs,
+            sizing_mode='stretch_both'
+        )
+
+        return layout
 
 # --- 用于直接测试此视图 (可选) --- 
 # if __name__ == '__main__':
