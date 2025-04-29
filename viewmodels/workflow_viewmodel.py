@@ -151,7 +151,6 @@ class WorkflowViewModel(param.Parameterized):
     # 删除选中节点命令 (由 View 调用)
     def delete_node(self, node_id: str):
         """删除指定 ID 的节点。"""
-        # node_id = self.selected_node_id # 不再依赖内部状态，由调用者提供
         if not node_id or not self.model:
              logger.warning(f"WorkflowViewModel: delete_node command ignored, node_id ({node_id}) or model is invalid.")
              return
@@ -226,10 +225,6 @@ class WorkflowViewModel(param.Parameterized):
             self.visualizer_needs_refresh = True
             self.status_message = f"连接 {u} -> {v} 已删除。"
             if pn.state.notifications: pn.state.notifications.info(self.status_message, duration=2000)
-        except NotImplementedError:
-            logger.error("WorkflowViewModel: Workflow.remove_edge(u, sport, v, tport) method not implemented!")
-            self.status_message = "删除连接的功能尚未完全实现。"
-            if pn.state.notifications: pn.state.notifications.error(self.status_message, duration=4000)
         except Exception as e:
             logger.error(f"WorkflowViewModel: Error removing edge {u} -> {v}: {e}", exc_info=True)
             self.status_message = f"移除连接失败: {e}"

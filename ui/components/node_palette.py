@@ -3,24 +3,40 @@ import param
 from typing import Dict, Any, List
 
 from core.node import NodeRegistry
+# Import ViewModel
+from viewmodels import WorkflowViewModel
 
 class NodePalette(param.Parameterized):
     """
     显示可用节点的面板，并允许用户选择要添加的节点类型。
+    现在直接调用 ViewModel 的 add_node 方法。
     """
-    
-    # 使用 param.Selector 或类似的参数来触发选择事件
-    # 或者，我们直接生成按钮，按钮点击时通过回调通知父组件
-    selected_node_type = param.String(default=None, doc="当用户点击按钮时，设置此参数为节点类型")
+    # --- Input Parameters ---
+    view_model = param.ClassSelector(class_=WorkflowViewModel, doc="关联的 WorkflowViewModel")
+
+    # --- Output Parameters / Events ---
+    # REMOVED: selected_node_type is no longer used for signaling
+    # selected_node_type = param.String(default=None, doc="当用户点击按钮时，设置此参数为节点类型")
+
+    # --- Internal State ---
+    _node_buttons: Dict[str, pn.widgets.Button] = {}
+    _layout = param.Parameter() # Use param.Parameter for layout
 
     def __init__(self, **params):
+        # Explicitly check for view_model
+        if 'view_model' not in params or params['view_model'] is None:
+            raise ValueError("NodePalette requires a valid WorkflowViewModel instance.")
         super().__init__(**params)
-        self._node_buttons: Dict[str, pn.widgets.Button] = {}
+        # Initialize layout after super().__init__
         self._layout = pn.Column(pn.pane.Markdown("**可用节点**"), sizing_mode='stretch_width', min_height=300)
         self._update_palette()
 
     def _update_palette(self):
         """从 NodeRegistry 加载节点并创建按钮。"""
+        # Check if layout has been initialized
+        if self._layout is None:
+             self._layout = pn.Column(pn.pane.Markdown("**可用节点**"), sizing_mode='stretch_width', min_height=300)
+
         self._node_buttons.clear()
         available_nodes = NodeRegistry.list_available_nodes()
         buttons = []
@@ -30,26 +46,35 @@ class NodePalette(param.Parameterized):
             button = pn.widgets.Button(
                 name=node_type,
                 button_type='primary',
-                height=40, 
+                height=40,
                 margin=(5, 10),
-                # 可以考虑添加 tooltip 显示描述
-                # tooltips={'name': node_meta.get('description', '')} # Panel Button 不直接支持 tooltips
             )
             # 使用 lambda 捕获当前的 node_type
             button.on_click(lambda event, nt=node_type: self._on_node_select(nt))
             self._node_buttons[node_type] = button
             buttons.append(button)
-        
+
         # 更新 Column 内容，保留标题
-        self._layout.objects = [self._layout.objects[0]] + buttons 
+        # Ensure layout object exists before accessing its objects attribute
+        if self._layout.objects:
+            self._layout.objects = [self._layout.objects[0]] + buttons
+        else:
+             self._layout.objects = [pn.pane.Markdown("**可用节点**")] + buttons
 
     def _on_node_select(self, node_type: str):
-        """当节点按钮被点击时调用。"""
-        print(f"[NodePalette] Node selected: {node_type}") # DEBUG
-        # 设置参数以通知监听者（例如主视图）
-        self.selected_node_type = node_type 
-        # 可能需要重置，以便下次点击仍然触发事件？取决于 Panel 的行为
-        # 或者让父组件在处理后重置它 self.selected_node_type = None
+        """当节点按钮被点击时调用，直接调用 ViewModel。"""
+        if self.view_model:
+            try:
+                # Directly call the ViewModel command
+                self.view_model.add_node(node_type)
+            except Exception as e:
+                logger.error(f"NodePalette: Error calling view_model.add_node for {node_type}: {e}", exc_info=True)
+                # Optionally show notification via pn.state if available
+                if pn.state.notifications:
+                    pn.state.notifications.error(f"添加节点 '{node_type}' 失败: {e}", duration=3000)
+        else:
+             logger.error("NodePalette: Cannot add node, ViewModel is not available.")
+
 
     def panel(self) -> pn.viewable.Viewable:
         """返回此组件的 Panel 表示。"""

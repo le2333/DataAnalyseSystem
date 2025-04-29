@@ -22,7 +22,7 @@ class NodeManagementPanel(param.Parameterized):
     # REMOVED: selected_node_id is now managed by ViewModel
     # selected_node_id = param.String(default=None, doc="当前选中的节点ID")
     # 请求删除节点 (携带节点ID)
-    request_delete_node_id = param.String(default=None, doc="请求删除指定ID的节点")
+    # request_delete_node_id = param.String(default=None, doc="请求删除指定ID的节点")
 
     # --- UI Widgets ---
     _node_selector = param.Parameter() # 使用 Select Widget
@@ -87,19 +87,27 @@ class NodeManagementPanel(param.Parameterized):
     def _update_selector_value(self, event: param.parameterized.Event):
         """当 ViewModel 的 selected_node_id 变化时，更新选择器的值。"""
         new_selection = event.new
-        logger.debug(f"NodeManagementPanel: ViewModel selected_node_id changed to {new_selection}. Updating selector value.")
+        logger.info(f"NodeManagementPanel._update_selector_value: Received new selection from VM: '{new_selection}'") # Log entry
+        logger.debug(f"    Current selector value: '{self._node_selector.value}'")
+        logger.debug(f"    Selector options: {self._node_selector.options}")
         # Update selector only if its value differs from the new VM state
         if self._node_selector.value != new_selection:
+            logger.info("    -> Selector value differs. Attempting update.")
             # Prevent the change handler from re-notifying the ViewModel
-            self._updating_selector_internally = True
+            logger.debug("       Setting _updating_selector_internally = True")
+            self._updating_selector_internally = True 
             try:
                 # Check if the new selection is valid in current options
                 if new_selection in self._node_selector.options or new_selection is None:
+                    logger.info(f"       Setting selector value to: '{new_selection}'")
                     self._node_selector.value = new_selection
                 else:
-                     logger.warning(f"NodeManagementPanel: ViewModel selected ID '{new_selection}' not in selector options. Cannot update UI.")
+                     logger.warning(f"       ViewModel selected ID '{new_selection}' not in selector options. Cannot update UI.")
             finally:
+                logger.debug("       Setting _updating_selector_internally = False")
                 self._updating_selector_internally = False
+        else:
+            logger.info("    -> Selector value matches VM state. No UI update needed.")
 
     def _forward_selection_change(self, event):
         """当用户在选择器中选择时，通知 ViewModel。"""
@@ -143,7 +151,13 @@ class NodeManagementPanel(param.Parameterized):
 
         logger.info(f"NodeManagementPanel: Requesting deletion of node: {node_id_to_remove}")
         # Set the output parameter for EditorView to pick up
-        self.request_delete_node_id = node_id_to_remove
+        # self.request_delete_node_id = node_id_to_remove
+        # Call ViewModel directly
+        try:
+            self.view_model.delete_node(node_id_to_remove)
+        except Exception as e:
+             logger.error(f"NodeManagementPanel: Error calling view_model.delete_node: {e}", exc_info=True)
+             if pn.state.notifications: pn.state.notifications.error(f"删除节点 '{node_id_to_remove}' 失败: {e}")
         # Reset the request immediately (or let EditorView do it? Let EditorView do it for consistency)
 
     def panel(self) -> pn.viewable.Viewable:

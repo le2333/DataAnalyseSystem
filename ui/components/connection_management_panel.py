@@ -19,8 +19,8 @@ class ConnectionManagementPanel(param.Parameterized):
     view_model = param.ClassSelector(class_=WorkflowViewModel, doc="关联的 WorkflowViewModel")
 
     # --- Output Parameters / Events ---
-    request_add_edge_data = param.Parameter(default=None, doc="请求添加边 (source_id, source_port, target_id, target_port)")
-    request_remove_edge_data = param.Parameter(default=None, doc="请求删除边 (source_id, source_port, target_id, target_port)")
+    # request_add_edge_data = param.Parameter(default=None, doc="请求添加边 (source_id, source_port, target_id, target_port)")
+    # request_remove_edge_data = param.Parameter(default=None, doc="请求删除边 (source_id, source_port, target_id, target_port)")
 
     # --- UI Widgets ---
     source_node_select = param.Parameter()
@@ -158,9 +158,6 @@ class ConnectionManagementPanel(param.Parameterized):
                     self.source_node_select.value = potential_source_id # Triggers source port update
             else:
                 logger.debug("Not setting source node as it's the same as the current target.")
-                # If previous was same as current, maybe clear source?
-                # if self.source_node_select.value == potential_source_id:
-                #     self.source_node_select.value = None
         else: # No valid previous target
             logger.debug("No valid previous target to set as source.")
             # Ensure source is not same as target
@@ -177,7 +174,6 @@ class ConnectionManagementPanel(param.Parameterized):
         logger.debug(f"ConnectionPanel: Updating node selectors with options: {new_options}")
         
         current_source = self.source_node_select.value
-        current_target_widget = self.target_node_select.value 
 
         source_changed = False
         target_changed = False
@@ -346,10 +342,20 @@ class ConnectionManagementPanel(param.Parameterized):
 
         logger.info(f"ConnectionManagementPanel: Requesting to add edge: {source_node}.{source_port} -> {target_node}.{target_port}")
         # Set the output parameter to signal the request
-        self.request_add_edge_data = (source_node, source_port, target_node, target_port)
+        edge_data = (source_node, source_port, target_node, target_port)
+        # self.request_add_edge_data = edge_data
+        # Call ViewModel directly
+        try:
+            self.view_model.add_edge(edge_data)
+        except ValueError as ve:
+             logger.warning(f"ConnectionPanel: Failed to add edge via VM: {ve}")
+             if pn.state.notifications: pn.state.notifications.warning(f"添加连接失败: {ve}")
+        except Exception as e:
+            logger.error(f"ConnectionPanel: Error calling view_model.add_edge: {e}", exc_info=True)
+            if pn.state.notifications: pn.state.notifications.error(f"添加连接时发生错误: {e}")
+
         # Optionally reset fields after request? Or let ViewModel handle it?
         # self.source_port_select.value = None
-        # self.target_port_select.value = None
 
     def _request_remove_edge(self, edge_data: Tuple[str, str, str, str]):
         """处理删除连接按钮点击事件，发出删除请求。"""
@@ -360,7 +366,13 @@ class ConnectionManagementPanel(param.Parameterized):
         # Assuming VM uses (src_id, src_port, tgt_id, tgt_port)
         logger.info(f"ConnectionManagementPanel: Requesting to remove edge: {u}.{source_port} -> {v}.{target_port}")
         # Set the output parameter
-        self.request_remove_edge_data = edge_data # Pass the exact data received
+        # self.request_remove_edge_data = edge_data # Pass the exact data received
+        # Call ViewModel directly
+        try:
+            self.view_model.remove_edge(edge_data)
+        except Exception as e:
+             logger.error(f"ConnectionPanel: Error calling view_model.remove_edge: {e}", exc_info=True)
+             if pn.state.notifications: pn.state.notifications.error(f"移除连接失败: {e}")
 
     # ==================
     # == Panel Layout ==
