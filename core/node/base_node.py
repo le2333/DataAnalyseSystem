@@ -1,10 +1,13 @@
 import abc
+import logging # 添加 logging
 import polars as pl
 from typing import Dict, List, Any, Type
 import panel as pn # 导入 panel
 import param # 导入 param 以支持默认实现
 # 导入 param 的元类
 from param.parameterized import ParameterizedMetaclass
+
+logger = logging.getLogger(__name__) # 获取 logger
 
 # 定义合并后的元类
 class NodeMeta(ParameterizedMetaclass, abc.ABCMeta):
@@ -24,6 +27,11 @@ class BaseNode(param.Parameterized, abc.ABC, metaclass=NodeMeta):
     # _node_id: str 
     # params: Dict[str, Any] = param.Dict(default={}, doc="节点的配置参数")
 
+    # 添加一些通用的、不应出现在配置面板中的参数
+    # 子类应该将自己的配置参数定义为 Parameterized 参数
+    position = param.Tuple(default=(0.0, 0.0), length=2, precedence=-1, doc="节点在画布上的位置")
+    workflow_runner = param.Parameter(default=None, precedence=-1, doc="工作流运行器的引用 (可选)")
+
     def __init__(self, node_id: str, params: Dict[str, Any] = None, **param_params):
         """
         初始化节点。
@@ -33,6 +41,11 @@ class BaseNode(param.Parameterized, abc.ABC, metaclass=NodeMeta):
             params: 节点的配置参数字典 (用于初始化 param 参数)。
             param_params: 其他传递给 param.Parameterized 的关键字参数。
         """
+        # 检查是否有 'position' 在 params 中，并单独处理
+        position = params.pop('position', None) if params else None
+        if position is not None:
+            param_params['position'] = position # 传递给 super init
+            
         # 使用 name 参数存储 node_id，因为 param.Parameterized 有 name 属性
         # 注意：需要确保这里的 name 不会与其他 param 参数冲突
         super().__init__(name=node_id, **param_params)
@@ -44,8 +57,8 @@ class BaseNode(param.Parameterized, abc.ABC, metaclass=NodeMeta):
             valid_params = {k: v for k, v in params.items() if k in self.param}
             if len(valid_params) != len(params):
                 invalid_keys = set(params.keys()) - set(valid_params.keys())
-                # logger.warning(f"节点 '{node_id}': 初始化时提供了无效或未定义的参数: {invalid_keys}")
-                print(f"警告：节点 '{node_id}': 初始化时提供了无效或未定义的参数: {invalid_keys}") # 打印警告
+                # 使用 logger
+                logger.warning(f"节点 '{node_id}': 初始化时提供了无效或未定义的参数: {invalid_keys}")
             if valid_params:
                  self.param.update(**valid_params)
              
@@ -133,23 +146,67 @@ class BaseNode(param.Parameterized, abc.ABC, metaclass=NodeMeta):
                 # 考虑更灵活的检查，例如允许 None 或子类？目前严格匹配
                 raise ValueError(f"节点 '{self.node_type}' (ID: {self.node_id}) 输入端口 '{name}' 的类型错误。期望 {expected_type.__name__}, 得到 {type(inputs[name]).__name__}")
 
-    # 新增方法: 获取配置面板
+    # --- 配置面板生成 (模板方法模式) ---
+
     def get_config_panel(self) -> pn.viewable.Viewable:
         """
-        返回此节点实例的 Panel 配置界面。
-        子类应重写此方法以提供自定义 UI 或更复杂的布局。
-        默认实现使用 pn.Param 显示所有非 name 且非隐藏的参数。
+        获取节点的配置面板 (模板方法)。
+        
+        **重要**: 此方法保证返回一个全新的顶层 Panel 容器 (`pn.Column`)，
+        以避免 Bokeh 的 "already in a doc" 错误。
+        
+        实际的 UI 内容由 `_build_config_panel_content` 方法构建。
+        子类通常只需要覆盖 `_build_config_panel_content`。
+        
+        Returns:
+            一个新的 Panel Viewable 对象，包含配置 UI。
         """
+        logger.debug(f"Node '{self.node_id}': Calling get_config_panel (Template Method)")
         try:
-            params_to_show = [p for p in self.param if p != 'name' and not self.param[p].precedence == -1]
+            # 调用由子类实现（或默认）的内容构建方法
+            content = self._build_config_panel_content()
+            # 总是将内容包装在一个新的 Column 中返回
+            # name 属性有助于调试时识别 Panel 对象
+            wrapper_name = f"{self.node_id}_config_wrapper"
+            logger.debug(f"Node '{self.node_id}': Wrapping content in new pn.Column: {wrapper_name}")
+            return pn.Column(content, name=wrapper_name, sizing_mode='stretch_width')
+        except Exception as e:
+            logger.error(f"节点 '{self.node_id}' 在 get_config_panel 中构建包装器时出错: {e}", exc_info=True)
+            return pn.pane.Alert(f"无法为节点 '{self.node_id}' 构建配置面板包装器: {e}", alert_type='danger')
+
+    def _build_config_panel_content(self) -> Any:
+        """
+        构建配置面板的实际 UI 内容 (由子类覆盖)。
+        
+        **重要**: 子类实现此方法时，应确保返回的任何 Panel 组件
+        (特别是包含复杂布局或自定义模型的) 都是新创建的实例，
+        而不是缓存的或共享的实例。
+        
+        默认实现使用 `pn.Param` 自动显示节点的可配置参数。
+        
+        Returns:
+            配置面板的内容 (单个 Panel 对象或列表)。
+        """
+        logger.debug(f"Node '{self.node_id}': Using default _build_config_panel_content (pn.Param)")
+        try:
+            # 定义不应出现在自动配置面板中的参数名称
+            excluded_params = ['name', 'position', 'workflow_runner']
+            # 获取所有非隐藏 (-1) 且不在排除列表中的参数
+            params_to_show = [
+                p for p in self.param 
+                if self.param[p].precedence != -1 and p not in excluded_params
+            ]
+            
             if params_to_show:
-                return pn.Param(self.param, parameters=params_to_show, name=f"参数: {self.node_type} ({self.node_id})")
+                # pn.Param 应该每次都生成新的视图元素
+                logger.debug(f"Node '{self.node_id}': Generating pn.Param for: {params_to_show}")
+                return pn.Param(self.param, parameters=params_to_show, name=f"参数: {self.node_type}")
             else:
+                logger.debug(f"Node '{self.node_id}': No configurable parameters found for default panel.")
                 return pn.pane.Markdown("_此节点没有可配置参数。_")
         except Exception as e:
-            # logger.error(f"为节点 '{self.node_id}' 生成默认配置面板失败: {e}", exc_info=True)
-            print(f"错误：为节点 '{self.node_id}' 生成默认配置面板失败: {e}") # 打印错误
-            return pn.pane.Alert(f"无法生成节点 '{self.node_id}' 的配置面板: {e}", alert_type='danger')
+            logger.error(f"节点 '{self.node_id}' 生成默认配置内容 (pn.Param) 失败: {e}", exc_info=True)
+            return pn.pane.Alert(f"无法为节点 '{self.node_id}' 生成默认配置内容: {e}", alert_type='danger')
 
     def __repr__(self) -> str:
         return f"<{self.node_type} node_id={self.node_id}>" 

@@ -6,7 +6,7 @@ import panel as pn
 # --- Logging Configuration ---
 # 配置日志记录器，以便看到来自核心和 UI 模块的调试信息
 logging.basicConfig(
-    level=logging.INFO, # 可以改为 logging.DEBUG 获取更详细信息
+    level=logging.DEBUG, # 使用 DEBUG 级别方便调试
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
@@ -21,12 +21,17 @@ sys.path.insert(0, str(project_root))
 # --- Import Core Components ---
 try:
     from core.node import NodeRegistry
-    from ui.views.main_view import MainView # 导入重构后的 MainView
-    # from ui.views.workflow_editor_view import WorkflowEditorView # 不再直接导入编辑器
-    from core.workflow import Workflow # 可能需要用于创建初始工作流
+    from core.workflow import Workflow
+    # 导入 ViewModel 和 View
+    from viewmodels import WorkflowViewModel
+    # 注意：如果 MainView 内部会创建 WorkflowEditorView，我们需要调整 MainView
+    # 或者直接在这里创建 WorkflowEditorView 并传递给 MainView（如果 MainView 设计允许）
+    # 假设我们暂时直接运行 WorkflowEditorView
+    from ui.views.workflow_editor_view import WorkflowEditorView
+    # from ui.views.main_view import MainView # 暂时不使用 MainView，直接测试 Editor
 except ImportError as e:
-    logger.error(f"无法导入核心组件。请确保你在项目根目录下运行，并且所有 __init__.py 文件都存在。错误: {e}", exc_info=True)
-    sys.exit(1) # Exit if core components cannot be imported
+    logger.error(f"无法导入核心组件或视图/视图模型。请确保路径和 __init__.py 文件正确。错误: {e}", exc_info=True)
+    sys.exit(1)
 
 # --- Discover Nodes (Initial discovery at startup) ---
 logger.info("应用程序启动 - 初始节点发现...")
@@ -42,17 +47,18 @@ try:
 except Exception as e:
     logger.error(f"初始节点发现过程中发生错误: {e}", exc_info=True)
 
-# --- Create Main View (at module level) ---
-logger.info("创建主视图...")
+# --- Create MVVM Instances ---
+logger.info("创建 ViewModel 和 View 实例...")
 try:
-    # 创建工作流编辑器视图实例
-    # 可以传入一个预先创建的 Workflow 对象，或者让视图创建默认的
-    # initial_workflow = Workflow(name="Initial Workflow")
-    # editor_view = WorkflowEditorView(workflow=initial_workflow)
-    main_view = MainView() 
-    logger.info("主视图创建成功。")
+    # 1. 创建 Model (可选，如果 ViewModel 可以创建默认的)
+    initial_workflow = Workflow(name="我的工作流")
+    # 2. 创建 ViewModel，传入 Model
+    workflow_view_model = WorkflowViewModel(workflow=initial_workflow)
+    # 3. 创建 View，传入 ViewModel
+    editor_view = WorkflowEditorView(view_model=workflow_view_model)
+    logger.info("ViewModel 和 View 创建成功。")
 except Exception as e:
-    logger.error(f"创建 MainView 时出错: {e}", exc_info=True)
+    logger.error(f"创建 MVVM 实例时出错: {e}", exc_info=True)
     sys.exit(1)
 
 # --- Dynamic Node Refresh on Session Load --- 
@@ -60,21 +66,17 @@ def refresh_nodes_on_load():
     """当新会话加载时，重新扫描节点并刷新节点面板。"""
     logger.info("会话加载/重载：检查节点更新...")
     try:
-        # 重新执行节点发现
         reloaded_module_count = NodeRegistry.discover_nodes(nodes_dir)
         logger.info(f"节点重新发现完成。尝试加载 {reloaded_module_count} 个模块。")
         new_available_nodes = NodeRegistry.list_available_nodes()
         logger.info(f"当前可用节点: {list(new_available_nodes.keys())}")
         
-        # 访问 main_view 实例中的 node_palette 并刷新它
-        # 确保 main_view 已经在这个函数的作用域内定义
-        if hasattr(main_view, 'workflow_editor') and \
-           hasattr(main_view.workflow_editor, 'node_palette') and \
-           main_view.workflow_editor.node_palette:
-            main_view.workflow_editor.node_palette.refresh()
+        # 直接刷新 editor_view 中的 node_palette
+        if hasattr(editor_view, 'node_palette') and editor_view.node_palette:
+            editor_view.node_palette.refresh()
             logger.info("节点面板已刷新。")
         else:
-            logger.warning("无法在 main_view 中找到 node_palette 来刷新。")
+            logger.warning("无法在 editor_view 中找到 node_palette 来刷新。")
             
     except Exception as e:
         logger.error(f"会话加载时动态刷新节点失败: {e}", exc_info=True)
@@ -86,16 +88,8 @@ logger.info("已注册 refresh_nodes_on_load 回调，用于在会话加载时�
 # --- Make it Servable (at module level) ---
 logger.info("准备启动 Panel 服务...")
 try:
-    # 使用 Panel 模板或直接服务视图
-    # template = pn.template.FastListTemplate(
-    #     title="时间序列分析平台 - 工作流编辑器",
-    #     main=[editor_view.panel()],
-    #     sidebar=[editor_view.node_palette.panel()] # 如果 Palette 不在 editor_view 内部管理
-    # )
-    # template.servable()
-    
-    # 直接服务编辑器视图的 panel
-    main_view.panel().servable(title="数据分析平台")
+    # 直接服务 WorkflowEditorView 的 panel
+    editor_view.panel().servable(title="工作流编辑器 (MVVM)")
     logger.info("应用已配置为可服务。请使用 'panel serve main.py --show' 来运行和查看。")
 except Exception as e:
      logger.error(f"配置 Panel 服务时出错: {e}", exc_info=True)

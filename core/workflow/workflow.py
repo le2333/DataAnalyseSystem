@@ -22,6 +22,12 @@ class Workflow:
         """返回内部的 NetworkX 图对象。"""
         return self._graph
 
+    @property
+    def nodes(self) -> Dict[str, BaseNode]:
+        """返回包含节点实例的字典 (只读访问)。"""
+        # 返回副本或视图更安全，但这里简单返回引用
+        return self._nodes
+
     def add_node(self, node_id: str, node_type: str, params: Optional[Dict[str, Any]] = None, position: Optional[Tuple[float, float]] = (0,0)) -> BaseNode:
         """
         向工作流中添加一个节点。

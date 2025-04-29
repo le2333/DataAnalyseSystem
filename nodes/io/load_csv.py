@@ -1,8 +1,10 @@
 import polars as pl
 import logging
+import uuid # 需要导入 uuid
 from typing import Dict, Type, Any
 import panel as pn
 import param
+import networkx as nx # 导入 networkx
 
 # 确保可以正确导入 BaseNode 和 NodeRegistry
 # 如果 nodes/io/ 在项目根目录下，相对导入可能工作
@@ -110,50 +112,56 @@ class LoadCsvNode(BaseNode):
             logger.error(f"预览错误: 读取 CSV 预览失败 {fpath}: {e}", exc_info=True)
             if pn.state.notifications: pn.state.notifications.error(f"读取预览失败: {type(e).__name__}", duration=4000)
 
-    @param.depends('preview_data', watch=False) # watch=False 因为我们只在 get_config_panel 调用它
-    def _get_preview_panel(self) -> pn.viewable.Viewable:
-        """根据 preview_data 的状态返回相应的 Panel 组件。"""
+    # @param.depends('preview_data') # 不再直接依赖，由 _build_config_panel_content 调用
+    def _get_preview_display(self, preview_data_value) -> pn.viewable.Viewable:
+        """根据 preview_data 的状态返回相应的预览 Panel 组件。"""
+        # 每次调用都创建新实例
+        # 方法内部仍然可以使用 self.preview_data，因为它反映了最新的状态
         if self.preview_data is None:
-            # 初始状态或加载失败时不显示任何内容
-            return pn.pane.Markdown("", height=0, width=0, margin=0, sizing_mode='fixed') # 完全隐藏
+            return pn.pane.Markdown("", height=0, width=0, margin=0, sizing_mode='fixed')
         elif self.preview_data.height == 0:
-             # 文件存在但为空或只有表头
              return pn.Column(
                  pn.pane.Markdown("#### 文件预览 (前3行)"),
                  pn.pane.Markdown("_预览为空或只有表头。_")
              )
         else:
-            # 成功加载预览
             return pn.Column(
                 pn.pane.Markdown("#### 文件预览 (前3行)"),
-                pn.pane.DataFrame(self.preview_data, max_rows=3, sizing_mode='stretch_width', index=False)
+                pn.pane.DataFrame(self.preview_data.clone(), max_rows=3, sizing_mode='stretch_width', index=False)
             )
 
-    # --- UI 配置面板 --- 
-    def get_config_panel(self) -> pn.viewable.Viewable:
+    # --- UI 配置面板 (实现 BaseNode 的抽象方法) --- 
+    def _build_config_panel_content(self) -> Any:
         """
-        返回此节点的自定义配置面板，包含预览功能。
+        构建 LoadCsvNode 的配置面板内容。
+        **重要**: 此方法在每次需要显示配置时被调用，应返回新创建的 UI 元素。
         """
-        # 手动创建控件以获得更好的布局控制
+        logger.debug(f"Node '{self.node_id}': Building NEW config panel content.")
+        # 每次调用都创建新的 Widgets
         file_path_input = pn.widgets.TextInput.from_param(self.param.file_path, placeholder="输入服务器上的文件路径...")
         preview_button = pn.widgets.Button.from_param(self.param.load_preview_action)
         separator_input = pn.widgets.TextInput.from_param(self.param.separator)
         header_check = pn.widgets.Checkbox.from_param(self.param.has_header)
         encoding_select = pn.widgets.Select.from_param(self.param.encoding)
-        n_rows_input = pn.widgets.IntInput.from_param(self.param.n_rows, placeholder="所有行") # 使用 IntInput 可能更清晰
+        n_rows_input = pn.widgets.IntInput.from_param(self.param.n_rows, placeholder="所有行")
 
-        # 获取当前预览状态的面板
-        preview_display_panel = self._get_preview_panel
+        # 每次调用都获取最新的预览状态显示组件
+        # 使用 pn.bind 动态更新预览区域，而不是依赖 param.depends
+        dynamic_preview_panel = pn.bind(self._get_preview_display, self.param.preview_data)
 
-        # 布局
+        # 每次调用都创建新的布局
         config_layout = pn.Column(
             pn.pane.Markdown("**CSV 加载选项**"),
             file_path_input,
-            preview_button, # 按钮紧随路径输入框
-            pn.Row(separator_input, header_check, styles={'align-items':'end'}), # 分隔符和表头一行
+            preview_button,
+            pn.Row(separator_input, header_check, styles={'align-items':'end'}),
             encoding_select,
             n_rows_input,
-            preview_display_panel, # 动态预览区域
+            dynamic_preview_panel, # 嵌入动态预览面板
             sizing_mode='stretch_width'
         )
-        return config_layout 
+        return config_layout
+
+    # 移除旧的 get_config_panel 方法
+    # def get_config_panel(self) -> pn.viewable.Viewable:
+    #     ... 

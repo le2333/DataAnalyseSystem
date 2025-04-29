@@ -5,6 +5,7 @@ import networkx as nx
 import hvplot.networkx as hvnx
 import holoviews as hv
 from holoviews import opts
+from holoviews.streams import Tap # 导入 Tap 流
 from bokeh.models import HoverTool
 
 from core.workflow import Workflow
@@ -14,130 +15,151 @@ logger = logging.getLogger(__name__)
 
 class WorkflowVisualizer(param.Parameterized):
     """
-    使用 hvPlot 和 NetworkX 静态可视化工作流图。
-    (移除了节点点击交互)
+    使用 hvPlot 和 NetworkX 可视化工作流图，并支持节点点击。
     """
     workflow = param.ClassSelector(class_=Workflow, precedence=-1)
-    # selected_node_id = param.String(default=None, doc="当前选中的节点ID") # 移除输出参数
+    # 输出参数：暴露被点击的节点 ID
+    tapped_node_id = param.String(default=None, doc="最后被点击的节点ID")
 
     # 内部状态
     _plot_pane = param.Parameter(default=pn.pane.HoloViews(None, sizing_mode='stretch_both'), precedence=-1)
     _node_positions = param.Dict(default={})
-    # _tap_stream = param.Parameter(precedence=-1) # 移除 tap stream
+    _tap_stream = param.Parameter(None, precedence=-1) # 用于 Tap 流
+    _current_plot = param.Parameter(None, precedence=-1) # 存储当前 plot 对象以连接流
 
     def __init__(self, **params):
         super().__init__(**params)
+        logger.info(f"WorkflowVisualizer __init__: Received workflow: {self.workflow.name if self.workflow else 'None'}")
+        self._tap_stream = Tap(transient=True)
         self._update_node_positions()
-        self._create_plot()
+        self._create_plot() # Initial plot creation
+        logger.info(f"WorkflowVisualizer __init__: Initial plot created. Pane object: {type(self._plot_pane.object)}")
 
     @param.depends('workflow', watch=True)
     def _handle_workflow_replacement(self, event=None):
-        logger.debug("WorkflowVisualizer detected workflow object replacement.")
+        logger.info(f"WorkflowVisualizer: Workflow object replaced. New workflow: {self.workflow.name if self.workflow else 'None'}. Refreshing plot.")
+        self.tapped_node_id = None
         self.refresh()
 
     def refresh(self):
-        logger.debug("WorkflowVisualizer refresh called.")
+        logger.info("WorkflowVisualizer refresh called.")
         self._update_node_positions()
         self._create_plot()
+        logger.info(f"WorkflowVisualizer refresh finished. Pane object: {type(self._plot_pane.object)}")
 
     def _update_node_positions(self):
         """从 workflow 对象中提取或计算节点位置。"""
         pos = {}
         if self.workflow and self.workflow.graph:
-            # 尝试从节点属性获取位置，如果不存在，则使用 networkx 布局算法
             pos = nx.get_node_attributes(self.workflow.graph, 'pos')
             if not pos or len(pos) != len(self.workflow.graph.nodes):
-                 logger.info("Node positions not found or incomplete in graph attributes, calculating spring layout.")
+                 logger.info("Node positions not found or incomplete, calculating spring layout.")
                  try:
-                     # 使用 spring_layout 作为备选，可能需要调整参数
-                     pos = nx.spring_layout(self.workflow.graph, k=0.8, iterations=50)
-                     # 可以考虑将计算出的位置存回 workflow graph (如果 workflow 设计允许)
-                     # nx.set_node_attributes(self.workflow.graph, pos, 'pos')
+                     pos = nx.spring_layout(self.workflow.graph, k=0.8, iterations=50, seed=42)
                  except Exception as e:
                      logger.error(f"Error calculating graph layout: {e}", exc_info=True)
-                     # 使用随机布局作为最终备选
-                     pos = nx.random_layout(self.workflow.graph)
-
+                     pos = nx.random_layout(self.workflow.graph, seed=42)
         self._node_positions = pos
-        # print(f"Updated node positions: {self._node_positions}")
 
     def _create_plot(self):
-        """创建或更新 HoloViews 图形 (无交互)。"""
+        logger.info("WorkflowVisualizer _create_plot called.")
         if not self.workflow or not self.workflow.graph or not self.workflow.graph.nodes:
-            logger.debug("Workflow is empty, clearing plot pane.")
-            # 创建一个空视图或提示信息
+            nodes_count = len(self.workflow.graph.nodes) if self.workflow and self.workflow.graph else 0
+            logger.warning(f"Workflow is empty or has no nodes (Nodes: {nodes_count}). Clearing plot pane.")
             empty_text = hv.Text(0, 0, "工作流为空").opts(xaxis=None, yaxis=None, toolbar=None)
-            new_pane = pn.pane.HoloViews(empty_text, sizing_mode='stretch_both')
-            if self._plot_pane.object != new_pane.object: # 避免不必要的更新
-                 self._plot_pane.object = new_pane.object
-            # if self.selected_node_id is not None: # 不再需要
-            #      self.selected_node_id = None
+            if not isinstance(self._plot_pane.object, hv.Text) or self._plot_pane.object.text != "工作流为空":
+                 self._plot_pane.object = empty_text
+            self._current_plot = None
             return
 
         G = self.workflow.graph
         pos = self._node_positions
+        logger.info(f"_create_plot: Plotting graph with {len(G.nodes)} nodes and {len(G.edges)} edges.")
 
-        if not pos:
-            self._update_node_positions()
-            pos = self._node_positions
-            if not pos:
-                 logger.warning("Could not obtain node positions for plotting.")
-                 pos = None 
-                 
-        # 定义节点悬停提示信息
-        node_hover = HoverTool(
-             tooltips=[
-                 ("ID", "@index"), # @index 会自动获取节点的 ID
-                 ("Type", "@node_type"), # 需要将 node_type 添加到节点属性中
-                 ("Params", "@params_str"), # 需要将参数摘要添加到节点属性中
-             ]
-         )
-        
-        # 获取节点类型和参数信息
-        node_types = {nid: node.node_type for nid, node in self.workflow._nodes.items()}
-        # 使用 node.param.values() 获取参数字典
-        node_params_str = {nid: str(node.param.values()) for nid, node in self.workflow._nodes.items()}
-        
-        # 将信息添加到图的节点属性中，供悬停工具使用
-        nx.set_node_attributes(G, node_types, 'node_type')
-        nx.set_node_attributes(G, node_params_str, 'params_str')
+        if not pos or len(pos) != len(G.nodes):
+            logger.error(f"_create_plot: Node positions are missing or incomplete ({len(pos)} positions for {len(G.nodes)} nodes). Cannot plot.")
+            empty_text = hv.Text(0, 0, "错误：节点位置信息不完整").opts(xaxis=None, yaxis=None, toolbar=None)
+            if not isinstance(self._plot_pane.object, hv.Text) or "节点位置信息不完整" not in self._plot_pane.object.text:
+                 self._plot_pane.object = empty_text
+            self._current_plot = None
+            return
+            
+        # --- Explicitly prepare node data for hv.Nodes --- 
+        node_ids = list(G.nodes())
+        node_data = {
+            'index': node_ids,
+            'x': [pos[nid][0] for nid in node_ids],
+            'y': [pos[nid][1] for nid in node_ids],
+            'node_type': [],
+            'params_str': []
+        }
 
-        # 使用 hvplot.networkx 绘制图形
-        # directed=True 确保箭头
-        # nodes_opts 和 edge_opts 用于样式控制
-        graph_plot = hvnx.draw(
-            G,
-            pos=pos,
-            node_size=150, # 节点大小
-            node_color='skyblue',
-            # node_label='index', # 可以在节点旁边显示ID，但可能重叠
-            arrowhead_length=0.05, # 箭头大小
-            edge_color='gray',
-            edge_width=1,
-            # width=600, height=400, # 使用 sizing_mode 控制大小
-            padding=0.1
-        )
+        if self.workflow.nodes:
+            node_types_dict = {nid: node.node_type for nid, node in self.workflow.nodes.items()}
+            node_params_dict = {}
+            for nid, node in self.workflow.nodes.items():
+                 try:
+                     node_params_dict[nid] = str(node.param.values())
+                 except Exception as e:
+                      logger.warning(f"Could not get params for node {nid}: {e}")
+                      node_params_dict[nid] = "Error"
+            
+            # Map attributes to the ordered node_ids list
+            node_data['node_type'] = [node_types_dict.get(nid, 'Unknown') for nid in node_ids]
+            node_data['params_str'] = [node_params_dict.get(nid, 'Error') for nid in node_ids]
+        else:
+            logger.error("_create_plot: workflow.nodes dictionary is empty! Cannot get node details for hover.")
+            node_data['node_type'] = ['Error'] * len(node_ids)
+            node_data['params_str'] = ['Error'] * len(node_ids)
 
-        # 设置 HoloViews 选项 (移除 tap 工具)
-        graph_plot = graph_plot.opts(
-            opts.Nodes(tools=[node_hover]), # 只保留悬停工具
-            # opts.Edges(
-            #      # color='edge_color',
-            #      # line_width='edge_width'
-            # ),
-            opts.Graph(
-                xaxis=None, yaxis=None, # 隐藏坐标轴
-                show_legend=False,
-                padding=0.1,
-                # aspect='equal' # 保持比例
+        logger.debug(f"_create_plot: Prepared node data: {node_data}")
+
+        try:
+            # --- Create hv.Nodes explicitly --- 
+            nodes_element = hv.Nodes(node_data, kdims=['x', 'y', 'index'], vdims=['node_type', 'params_str'])
+            logger.info("_create_plot: hv.Nodes element created successfully.")
+            
+            # --- Create hv.Graph using the NetworkX graph and the hv.Nodes element --- 
+            # Pass edge information implicitly from G, node info from nodes_element
+            graph_element = hv.Graph((G, nodes_element))
+            logger.info("_create_plot: hv.Graph element created successfully using (G, nodes_element).")
+            
+            # --- Add subscriber and apply options --- 
+            self._tap_stream.add_subscriber(self._handle_tap)
+            logger.info("Added _handle_tap as subscriber to tap stream.")
+
+            node_hover = HoverTool(
+                tooltips=[("ID", "@index"), ("Type", "@node_type"), ("Params", "@params_str")]
             )
-        )
+            
+            # Apply options using .opts()
+            # Combine Graph, Nodes, and Edge styling in one call
+            graph_plot = graph_element.opts(
+                # Options specific to Nodes element
+                opts.Nodes(size=10, fill_color='skyblue', line_color='black', 
+                           tools=[node_hover, 'tap'], active_tools=['tap']), 
+                # Options specific to Graph element (including edge styling)
+                opts.Graph(xaxis=None, yaxis=None, show_legend=False, padding=0.1, 
+                           edge_color='gray', edge_line_width=1) # Apply edge styles here
+            )
+            logger.info("_create_plot: HoloViews options applied to hv.Graph.")
 
-        logger.debug("HoloViews static plot created/updated.")
-        # 直接更新 pane 的 object
-        if self._plot_pane.object != graph_plot:
-             self._plot_pane.object = graph_plot
-        # self.param.trigger('_plot_pane') # 更新 object 会自动触发
+        except Exception as e:
+            logger.error(f"_create_plot: Error during hv.Nodes/hv.Graph creation or opts: {e}", exc_info=True)
+            empty_text = hv.Text(0, 0, f"绘图错误: {e}").opts(xaxis=None, yaxis=None, toolbar=None)
+            if not isinstance(self._plot_pane.object, hv.Text) or "绘图错误" not in self._plot_pane.object.text:
+                 self._plot_pane.object = empty_text
+            self._current_plot = None
+            return
+            
+        logger.info(f"_create_plot: Updating plot pane. Current object type: {type(self._plot_pane.object)}, New object type: {type(graph_plot)}")
+        self._current_plot = graph_plot
+        self._plot_pane.object = self._current_plot
+        logger.info("_create_plot: Plot pane object updated.")
+
+    def _handle_tap(self, x, y):
+        # Keep simplified callback
+        logger.critical(f"***** _handle_tap CALLED! x={x}, y={y} *****") 
 
     @param.depends('_plot_pane')
     def view(self) -> pn.viewable.Viewable:
@@ -146,6 +168,4 @@ class WorkflowVisualizer(param.Parameterized):
 
     def panel(self) -> pn.viewable.Viewable:
         """返回此组件的 Panel 表示。"""
-        # 确保在返回前至少创建/更新一次视图
-        # self._update_plot_data() # 这可能会导致不必要的重复计算，依赖初始化和watch
         return self.view 

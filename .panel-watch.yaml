@@ -1,10 +1,11 @@
 # Panel 热加载配置
 watch:
   # 监视这些目录和文件
-  - model
-  - view
-  - controller
-  - app.py
+  - core
+  - ui
+  - workflows
+  - nodes
+  - main.py
   
 # 忽略这些文件和目录
 ignore:
@@ -12,3 +13,10 @@ ignore:
   - "__pycache__"
   - ".git"
   - ".cursor" 
+  - ".idea"
+  - ".vscode"
+  - ".env"
+  - ".venv"
+  - ".pytest_cache"
+  - ".ruff_cache"
+  - ".DS_Store"
