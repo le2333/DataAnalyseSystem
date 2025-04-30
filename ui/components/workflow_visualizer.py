@@ -38,7 +38,7 @@ class WorkflowVisualizer(BasePanelComponent):
     _plot_pane = param.Parameter(default=pn.pane.HoloViews(None, sizing_mode='stretch_both'), precedence=-1)
     _node_positions = param.Dict(default={})
     # 使用 Selection1D 流
-    _selection_stream = param.Parameter(None, precedence=-1)
+    _selection_stream = param.Parameter(None, precedence=-1) 
     _current_plot = param.Parameter(None, precedence=-1)
 
     def __init__(self, view_model: WorkflowViewModel, **params):
@@ -137,7 +137,7 @@ class WorkflowVisualizer(BasePanelComponent):
 
         logger.info(f"_create_plot: Graph nodes with attributes: {list(G.nodes(data=True))}")
         logger.info(f"_create_plot: Graph edges with attributes: {list(G.edges(data=True))}")
-        
+
         try:
             # --- 创建 HoloViews Graph 直接从 NetworkX graph G --- 
             # 移除 kdims，让 HV 自动推断边的连接方式
@@ -151,7 +151,7 @@ class WorkflowVisualizer(BasePanelComponent):
             # --- Initialize or Re-link Selection1D Stream --- 
             if self._selection_stream is None:
                 self._selection_stream = Selection1D(source=graph_element.nodes)
-                self._selection_stream.add_subscriber(self._handle_selection)
+                      self._selection_stream.add_subscriber(self._handle_selection)
                 logger.info("Selection1D stream initialized and linked to graph nodes.")
             elif self._selection_stream.source is not graph_element.nodes:
                 self._selection_stream.source = graph_element.nodes
@@ -168,16 +168,16 @@ class WorkflowVisualizer(BasePanelComponent):
             styled_graph = graph_element.opts(
                 opts.Nodes(size=15, color='type', cmap='category20',
                            tools=[hover, 'tap'], line_color='black'),
-                opts.Graph(xaxis=None, yaxis=None, show_legend=False, padding=0.1,
+                 opts.Graph(xaxis=None, yaxis=None, show_legend=False, padding=0.1,
                            directed=False, # Keep directed=False for now
-                           edge_color='gray', edge_line_width=1)
+                            edge_color='gray', edge_line_width=1)
             )
             styled_labels = labels_element.opts(
-                 opts.Labels(text_font_size='8pt', text_color='black',
+                 opts.Labels(text_font_size='8pt', text_color='black', 
                              text_baseline='bottom', text_align='center', yoffset=0.02)
             )
             logger.info("_create_plot: Options applied to graph and labels.")
-
+            
             final_plot = styled_graph * styled_labels
             logger.info("_create_plot: Graph and labels overlaid.")
 
@@ -193,7 +193,7 @@ class WorkflowVisualizer(BasePanelComponent):
             self._current_plot = None
             if self._selection_stream: self._selection_stream.source = None
             return
-
+            
         # --- 更新 Panel 窗格 (使用 .object 更新) --- 
         self._current_plot = final_plot
         logger.info(f"_create_plot: 正在更新现有绘图窗格的 object 属性。")
@@ -224,7 +224,7 @@ class WorkflowVisualizer(BasePanelComponent):
                 # Check if it's pandas DataFrame or dictionary-like
                 if hasattr(nodes_data, 'iloc'): # Pandas DataFrame
                     if not nodes_data.empty and selected_idx < len(nodes_data):
-                        try:
+                     try:
                             selected_node_id = nodes_data.iloc[selected_idx].get('index', None) # Use .get for safety
                             if selected_node_id is None: # Try accessing index directly if column name is different
                                 selected_node_id = nodes_data.index[selected_idx]
@@ -249,7 +249,7 @@ class WorkflowVisualizer(BasePanelComponent):
                 if selected_node_id:
                     logger.info(f"_handle_selection: 节点索引 {selected_idx} 已选择，映射到 ID: {selected_node_id}")
                     self.view_model.select_node(selected_node_id)
-                else:
+                 else:
                     logger.warning(f"_handle_selection: 无法从索引 {selected_idx} 映射节点 ID。")
 
             else:

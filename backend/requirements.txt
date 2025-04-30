@@ -1,0 +1,24 @@
+fastapi
+uvicorn[standard]
+polars # 需要确认版本，暂时不指定
+prefect # 需要确认版本或指定 >= 2.0
+param==2.0.1
+pyarrow==14.0.1
+# Potential Node Dependencies (from root requirements)
+pandas==2.2.1
+numpy==1.26.4
+matplotlib==3.8.3
+plotly==5.19.0
+statsmodels==0.14.1
+scikit-learn==1.4.1
+tsfresh==0.20.2
+tslearn==0.6.3
+prophet==1.1.5
+torch==2.2.1
+darts==0.27.0
+# Other useful libraries potentially needed by nodes or core
+python-dotenv==1.0.1 # Might be useful for configuration
+watchdog==3.0.0 # Might be used by Prefect or for file watching nodes
+# Removed: streamlit, jupyter, panel, holoviews, datashader, hvplot, colorcet, bokeh, perfect
+
+# Add other core dependencies later (polars, prefect, etc.) 
