@@ -31,7 +31,7 @@ class NodeRegistry:
         if not issubclass(node_cls, BaseNode):
             raise TypeError(f"类 {node_cls.__name__} 必须是 BaseNode 的子类")
         if not inspect.isclass(node_cls) or inspect.isabstract(node_cls):
-             return node_cls
+             return node_cls # 如果不是具体类，则不注册
 
         node_type = node_cls.__name__
         if node_type in cls._registry:

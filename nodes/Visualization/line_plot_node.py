@@ -30,17 +30,17 @@ class LinePlotNode(BaseNode):
     # 注意：实际的输入 DataFrame 不会直接作为 param 参数，而是在 run 方法中接收
     # 但我们需要知道可能的列名来填充下拉菜单
 
-    x_col = param.Selector(default=None, objects=[], label="X-axis (Time/Index)")
-    y_cols = param.ListSelector(default=[], objects=[], label="Y-axis (Values)")
-    title = param.String(default="Time Series Plot", label="Chart Title")
-    xlabel = param.String(default="X Axis", label="X Label")
-    ylabel = param.String(default="Y Axis", label="Y Axis")
-    use_rasterize = param.Boolean(default=True, label="Use Rasterize (for large data)")
+    x_col = param.Selector(default=None, objects=[], label="X 轴 (时间/索引)")
+    y_cols = param.ListSelector(default=[], objects=[], label="Y 轴 (值)")
+    title = param.String(default="Time Series Plot", label="图表标题")
+    xlabel = param.String(default="X Axis", label="X 轴标签")
+    ylabel = param.String(default="Y Axis", label="Y 轴标签")
+    use_rasterize = param.Boolean(default=True, label="使用 Rasterize (用于大数据)")
     legend_position = param.Selector(default='top_left', objects=[
         'top_left', 'top_right', 'bottom_left', 'bottom_right', 'right', 'left'
-    ], label="Legend Position")
-    width = param.Integer(default=800, bounds=(100, 2000), label="Width")
-    height = param.Integer(default=400, bounds=(100, 2000), label="Height")
+    ], label="图例位置")
+    width = param.Integer(default=800, bounds=(100, 2000), label="宽度")
+    height = param.Integer(default=400, bounds=(100, 2000), label="高度")
     # TODO: 添加更多样式参数，如颜色、线型等
 
     # 内部状态，用于存储输入数据的列名
@@ -48,32 +48,17 @@ class LinePlotNode(BaseNode):
 
     def __init__(self, **params):
         super().__init__(**params)
-        self._hv_pane = pn.pane.HoloViews(None, sizing_mode='stretch_width')
         # 在初始化时或数据更新时更新列选择器
         self._update_column_selectors()
-        # 绑定预览更新逻辑
-        self._update_preview = pn.bind(
-            self._generate_preview_plot,
-            x_col=self.param.x_col,
-            y_cols=self.param.y_cols,
-            title=self.param.title,
-            xlabel=self.param.xlabel,
-            ylabel=self.param.ylabel,
-            use_rasterize=self.param.use_rasterize,
-            legend_position=self.param.legend_position,
-            width=self.param.width,
-            height=self.param.height
-        )
-        self._hv_pane.object = self._update_preview() # 初始预览
 
-    @property
-    def inputs(self):
-        # 修正：直接返回类型字典，而不是使用 NodeIONature
+    @classmethod
+    def define_inputs(cls) -> dict:
+        """定义此节点的输入。"""
         return {"input_data": pl.DataFrame}
 
-    @property
-    def outputs(self):
-        # 修正：直接返回类型字典，使用 hv.Layout 或 hv.Element 代表 HoloViews 对象
+    @classmethod
+    def define_outputs(cls) -> dict:
+        """定义此节点的输出。"""
         # hv.Layout 是一个更通用的容器类型，可以包含单个图或多个图
         return {"plot_object": hv.Layout} # 或者 hv.Element 如果确定总是单个图
 
@@ -108,8 +93,8 @@ class LinePlotNode(BaseNode):
         """核心绘图逻辑"""
         if not x_col or not y_cols or df.is_empty() or x_col not in df.columns or not all(y in df.columns for y in y_cols):
             # 如果缺少必要信息或数据为空，返回空图或提示信息
-            return hv.Text(width // 2, height // 2, """Please select valid X and Y columns
-and ensure input data is connected.""", halign='center', valign='center').opts(
+            return hv.Text(width // 2, height // 2, """请选择有效的 X 和 Y 列
+并确保输入数据已连接。""", halign='center', valign='center').opts(
                 xaxis=None, yaxis=None, width=width, height=height
             )
 
@@ -136,8 +121,8 @@ and ensure input data is connected.""", halign='center', valign='center').opts(
         except Exception as e:
             # 处理绘图时可能发生的错误 (例如，数据类型不兼容)
             # 修正：使用三引号处理多行 f-string
-            error_message = f"""Error creating plot: {e}
-Check column selections and data types."""
+            error_message = f"""创建绘图时出错: {e}
+检查列选择和数据类型。"""
             return hv.Text(width // 2, height // 2, error_message, halign='center', valign='center').opts(
                 xaxis=None, yaxis=None, width=width, height=height
             )
@@ -179,26 +164,27 @@ Check column selections and data types."""
             try:
                 preview_df = pl.DataFrame(data)
             except Exception: # 如果创建失败，回退
-                 preview_df = pl.DataFrame({ # Fallback
+                 preview_df = pl.DataFrame({ # 回退
                     "time": pl.datetime_range(start=datetime(2024, 1, 1, 0), end=datetime(2024, 1, 1, 1), interval="1m", eager=True),
                     "value": np.random.randn(61).cumsum()
                  })
-                 self._update_column_selectors(preview_df) # 使用 fallback 列更新
+                 self._update_column_selectors(preview_df) # 使用回退列更新
 
 
         # 使用当前配置和预览数据生成图表
         if x_col is None or not y_cols:
              # 如果用户还未选择有效的列，显示提示信息而不是绘图
-              return hv.Text(width // 2, height // 2, "Select X and Y columns for preview.", halign='center', valign='center').opts(
+              return hv.Text(width // 2, height // 2, "为预览选择 X 和 Y 列。", halign='center', valign='center').opts(
                     xaxis=None, yaxis=None, width=width, height=height
               )
 
         return self._create_plot(preview_df, x_col, y_cols, title, xlabel, ylabel,
                                  use_rasterize, legend_position, width, height)
 
-    def get_config_pane(self):
+    def _build_config_panel_content(self) -> pn.viewable.Viewable:
         """
-        返回此节点的 Panel 配置面板。
+        构建此节点的 Panel 配置面板内容。
+        **重要**: 此方法在每次需要显示配置时被调用，应返回新创建的 UI 元素。
         """
         # 使用 self.param 自动生成控件
         param_pane = pn.Param(
@@ -217,28 +203,50 @@ Check column selections and data types."""
             show_name=False # 不显示参数名称旁边的默认标签
         )
 
-        # 将参数控件和预览图组合到布局中
+        # 创建一个新的 HoloViews pane 每次调用
+        # 将 pn.bind 返回的 *函数* 传递给 HoloViews pane
+        preview_plot_func = pn.bind(
+            self._generate_preview_plot,
+            x_col=self.param.x_col,
+            y_cols=self.param.y_cols,
+            title=self.param.title,
+            xlabel=self.param.xlabel,
+            ylabel=self.param.ylabel,
+            use_rasterize=self.param.use_rasterize,
+            legend_position=self.param.legend_position,
+            width=self.param.width,
+            height=self.param.height
+        )
+        # Create a NEW pane instance here!
+        hv_preview_pane = pn.pane.HoloViews(preview_plot_func, sizing_mode='stretch_width')
+
+        # 将参数控件和新的预览图组合到布局中
         config_layout = pn.Column(
-            pn.pane.Markdown("### Line Plot Configuration"),
+            pn.pane.Markdown("### 折线图配置"),
             param_pane,
-            pn.pane.Markdown("### Preview"),
-            self._hv_pane, # 显示绑定了 _generate_preview_plot 的 HoloViews 窗格
+            pn.pane.Markdown("### 预览"),
+            hv_preview_pane, # 使用新的 pane
             sizing_mode='stretch_width'
         )
         return config_layout
 
     # --- 工作流执行 ---
-    def _run(self, input_data: pl.DataFrame):
+    def run(self, inputs: dict) -> dict:
         """
         工作流执行时调用的方法。
         接收真实的输入数据并生成最终的图表对象。
         """
+        # 获取输入 DataFrame
+        input_df = inputs.get("input_data")
+        if input_df is None or not isinstance(input_df, pl.DataFrame):
+             raise ValueError(f"节点 '{self.node_id}': 需要名为 'input_data' 的 Polars DataFrame 输入。")
+
         # 1. (可选) 更新列选择器，以防输入数据的列与上次不同
-        self._update_column_selectors(input_data)
+        self._update_column_selectors(input_df)
 
         # 2. 使用当前的配置参数和接收到的真实数据生成图表
         final_plot = self._create_plot(
-            df=input_data,
+            df=input_df,
             x_col=self.x_col,
             y_cols=self.y_cols,
             title=self.title,
@@ -250,7 +258,7 @@ Check column selections and data types."""
             height=self.height
         )
 
-        # 3. 返回包含图表对象的字典，键与 outputs 中定义的名称匹配
+        # 3. 返回包含 HoloViews 图表对象的字典
         return {"plot_object": final_plot}
 
     # --- (高级) 状态管理 ---

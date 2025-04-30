@@ -59,6 +59,7 @@ class Workflow:
         # 在 NetworkX 图中添加节点，可以附带属性
         self._graph.add_node(node_id, type=node_type, pos=position, label=f"{node_type}\n({node_id})") # 添加 type 和 position 属性
         logger.info(f"节点 '{node_id}' (类型: {node_type}) 已添加到工作流 '{self.name}'")
+        logger.critical(f"Workflow.add_node: Graph nodes after adding '{node_id}': {list(self._graph.nodes(data=True))}")
         return node_instance
 
     def remove_node(self, node_id: str):
@@ -115,26 +116,32 @@ class Workflow:
         self._graph.add_edge(source_node_id, target_node_id, source_port=source_port, target_port=target_port)
         logger.info(f"已添加连接：从 '{source_node_id}.{source_port}' 到 '{target_node_id}.{target_port}'")
 
-    def remove_edge(self, source_node_id: str, target_node_id: str, target_port: str):
+    def remove_edge(self, source_node_id: str, target_node_id: str, source_port: str, target_port: str):
         """
-        移除两个节点之间指定目标端口的连接。
-        注意：NetworkX 的 remove_edge 需要源和目标 ID。我们通过 target_port 确保移除正确的边（以防多重边）。
+        移除两个节点之间指定端口的连接。
+        需要所有端口信息以区分可能的平行边（尽管我们目前不允许）。
 
         Args:
             source_node_id: 源节点的 ID。
             target_node_id: 目标节点的 ID。
-            target_port: 目标节点的输入端口名称，用于标识要删除的特定连接。
+            source_port: 源节点的输出端口名称。
+            target_port: 目标节点的输入端口名称。
 
         Raises:
             KeyError: 如果边不存在或不匹配。
         """
+        edge_found = False
+        # 对于有向图，NetworkX 默认不支持平行边，除非使用 MultiDiGraph。
+        # 但为了代码健壮性，我们检查端口是否匹配。
+        if self._graph.has_edge(source_node_id, target_node_id):
         edge_data = self._graph.get_edge_data(source_node_id, target_node_id)
-        # NetworkX 图可能有多条边，但我们这里不允许。如果允许多重边，需要传入 key。
-        if edge_data and edge_data.get('target_port') == target_port:
+            if edge_data and edge_data.get('source_port') == source_port and edge_data.get('target_port') == target_port:
             self._graph.remove_edge(source_node_id, target_node_id)
-            logger.info(f"已移除连接：从 '{source_node_id}' 到 '{target_node_id}' (目标端口: {target_port})")
-        else:
-            raise KeyError(f"在 '{source_node_id}' 和 '{target_node_id}' 之间找不到指向目标端口 '{target_port}' 的连接。")
+                logger.info(f"已移除连接：从 '{source_node_id}.{source_port}' 到 '{target_node_id}.{target_port}'")
+                edge_found = True
+
+        if not edge_found:
+            raise KeyError(f"在 '{source_node_id}.{source_port}' 和 '{target_node_id}.{target_port}' 之间找不到匹配的连接。")
 
     def get_node(self, node_id: str) -> BaseNode:
         """
@@ -254,54 +261,56 @@ class Workflow:
 
     def validate(self) -> bool:
         """
-        验证工作流的有效性。
-        目前只检查是否存在循环。
-        未来可以添加更多检查，如输入输出类型匹配等。
+        验证工作流的有效性 (例如，检查循环、端口连接类型等)。
+        当前只检查循环。
         """
         try:
+            # 检查图中是否存在循环
             cycles = list(nx.simple_cycles(self._graph))
             if cycles:
                 logger.error(f"工作流 '{self.name}' 包含循环: {cycles}")
                 return False
-        except nx.NetworkXException as e:
-             logger.error(f"检查工作流 '{self.name}' 循环时出错: {e}")
-             return False # 如果图操作出错，也认为无效
+            
+            # TODO: 添加端口类型验证
+            # for u, v, data in self._graph.edges(data=True):
+            #     src_node = self.get_node(u)
+            #     tgt_node = self.get_node(v)
+            #     src_port_name = data.get('source_port')
+            #     tgt_port_name = data.get('target_port')
+            #     # 检查类型兼容性...
 
-        # TODO: 添加更多验证逻辑，例如：
-        # 1. 检查所有节点的必需输入是否都已连接
-        # 2. 检查连接的端口类型是否匹配 (需要更详细的类型信息)
-
-        logger.info(f"工作流 '{self.name}' 验证通过 (无循环)。")
         return True
+        except Exception as e:
+            logger.error(f"验证工作流 '{self.name}' 时出错: {e}", exc_info=True)
+            return False
 
     def get_topological_order(self) -> List[str]:
         """
-        返回节点的拓扑排序列表。
+        获取节点的拓扑排序。
+        如果图包含循环，则会引发 nx.NetworkXUnfeasible 异常。
         """
-        if not nx.is_directed_acyclic_graph(self._graph):
-            raise ValueError("工作流包含循环，无法进行拓扑排序。")
         return list(nx.topological_sort(self._graph))
 
     def get_node_predecessors(self, node_id: str) -> List[Tuple[str, str, str]]:
         """
-        获取一个节点的所有直接前驱节点及其连接信息。
+        获取指定节点的所有直接前驱及其连接信息。
 
         Args:
-            node_id: 目标节点的 ID。
+            node_id: 目标节点 ID。
 
         Returns:
-            一个列表，每个元素是一个元组 (predecessor_id, source_port, target_port)。
+            一个列表，每个元素是 (predecessor_id, source_port, target_port) 的元组。
         """
         predecessors = []
-        for u, v, data in self.graph.in_edges(node_id, data=True):
-            predecessors.append((u, data['source_port'], data['target_port']))
+        for u, v, data in self._graph.in_edges(node_id, data=True):
+            predecessors.append((u, data.get('source_port'), data.get('target_port')))
         return predecessors
 
     def __repr__(self) -> str:
-        return f"<Workflow name='{self.name}' nodes={len(self._nodes)} edges={self._graph.number_of_edges()}>"
+        return f"Workflow(name='{self.name}', nodes={len(self._nodes)}, edges={self._graph.number_of_edges()})"
 
     def clear(self):
         """清空工作流中的所有节点和边。"""
-        self._graph.clear()
         self._nodes.clear()
-        logger.info(f"工作流 '{self.name}' 已被清空。") 
+        self._graph.clear()
+        logger.info(f"工作流 '{self.name}' 已清空。") 

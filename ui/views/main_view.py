@@ -6,8 +6,8 @@ import uuid
 from pathlib import Path
 import json
 
-# --- Standard Imports ---
-# Assuming running via main.py from the root directory
+# --- 标准导入 ---
+# 假设从根目录通过 main.py 运行
 from core.workflow import Workflow, WorkflowRunner
 from core.node import NodeRegistry
 # 不再直接依赖子组件，而是依赖编辑器视图
@@ -17,7 +17,7 @@ from core.node import NodeRegistry
 from ui.views.workflow_editor_view import WorkflowEditorView # 导入编辑器视图
 
 
-pn.extension(notifications=True) # Enable notifications for user feedback
+pn.extension(notifications=True) # 启用通知以提供用户反馈
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +27,16 @@ class MainView(param.Parameterized):
     管理顶层布局（如标签页、工具栏），并包含具体功能视图（如工作流编辑器）。
     """
 
-    # --- Core Objects ---
+    # --- 核心对象 ---
     # MainView 持有当前活动的工作流实例
     workflow = param.ClassSelector(class_=Workflow)
     runner = param.ClassSelector(class_=WorkflowRunner)
 
-    # --- Views/Pages (as Tabs) ---
+    # --- 视图/页面 (作为标签页) ---
     # 实例化子视图
     workflow_editor: WorkflowEditorView = None
 
-    # --- UI Components / Widgets (Toolbar) ---
+    # --- UI 组件 / 控件 (工具栏) ---
     run_button = param.Parameter()
     save_button = param.Parameter()
     load_button = param.Parameter()
@@ -49,13 +49,13 @@ class MainView(param.Parameterized):
         """
         初始化 MainView 框架。
         """
-        # --- Set default core objects BEFORE super().__init__ ---
+        # --- 在 super().__init__() 之前设置默认核心对象 ---
         if 'workflow' not in params:
             params['workflow'] = Workflow(name="New Workflow")
         if 'runner' not in params:
             params['runner'] = WorkflowRunner()
 
-        # --- Initialize Components and Widgets (Toolbar) ---
+        # --- 初始化组件和控件 (工具栏) ---
         self.run_button = pn.widgets.Button(name="▶️ 运行工作流", button_type="success", width=120, align='center')
         self.save_button = pn.widgets.Button(name="💾 保存工作流", button_type="primary", width=120, align='center')
         self.load_button = pn.widgets.Button(name="📂 加载工作流", button_type="default", width=120, align='center')
@@ -63,14 +63,14 @@ class MainView(param.Parameterized):
         self.delete_node_button = pn.widgets.Button(name="❌ 删除选中节点", button_type="warning", width=150, align='center', disabled=True)
         self.file_input = pn.widgets.FileInput(accept=".json", multiple=False, visible=False)
         
-        # --- Instantiate Sub-Views ---
+        # --- 实例化子视图 ---
         # 将 MainView 持有的 workflow 实例传递给编辑器
         self.workflow_editor = WorkflowEditorView(workflow=params['workflow'])
         
-        # --- Call super().__init__ ---
+        # --- 调用 super().__init__() ---
         super().__init__(**params)
 
-        # --- Bind Toolbar Interactions ---
+        # --- 绑定工具栏交互 ---
         self.run_button.on_click(self._run_workflow)
         self.save_button.on_click(self._trigger_save_workflow)
         self.load_button.on_click(self._trigger_load_workflow)
@@ -78,7 +78,7 @@ class MainView(param.Parameterized):
         self.delete_node_button.on_click(self._delete_selected_node) # 需要访问编辑器的选中状态
         self.file_input.param.watch(self._handle_load_workflow, 'value')
         
-        # --- Watch for changes that affect the toolbar ---
+        # --- 监听影响工具栏的更改 ---
         # 监听编辑器视图的选中节点，以启用/禁用删除按钮
         self.workflow_editor.param.watch(self._update_delete_button_state, 'selected_node_id')
         # 监听工作流替换事件，以确保编辑器视图使用新的实例
@@ -86,7 +86,7 @@ class MainView(param.Parameterized):
         # 初始化删除按钮状态
         self._update_delete_button_state()
 
-    # --- Toolbar Action Handlers ---
+    # --- 工具栏动作处理程序 ---
     
     def _update_delete_button_state(self, event=None):
          """根据编辑器视图的选中状态更新删除按钮。"""
@@ -164,7 +164,7 @@ class MainView(param.Parameterized):
                 new_workflow = Workflow.deserialize(json_data)
                 # 替换 MainView 持有的 workflow 实例
                 # 这会触发 _handle_workflow_replacement
-                self.workflow = new_workflow 
+                self.workflow = new_workflow
                 logger.info(f"工作流 '{new_workflow.name}' 已成功加载。")
                 self.status_text.object = f"状态：加载成功 - {new_workflow.name}"
                 if pn.state.notifications:
@@ -184,7 +184,7 @@ class MainView(param.Parameterized):
                 self.file_input.value = None
                 self.file_input.filename = None
                 self.file_input.visible = False
-                
+
     def _handle_workflow_replacement(self, event: param.parameterized.Event):
         """当 self.workflow 被新实例替换时，确保子视图也更新。"""
         logger.info(f"MainView workflow replaced. Updating editor view.")
@@ -200,7 +200,7 @@ class MainView(param.Parameterized):
         logger.info("触发清空工作流...")
         try:
             # 创建新实例并替换，触发 _handle_workflow_replacement
-            self.workflow = Workflow(name="New Workflow") 
+            self.workflow = Workflow(name="New Workflow")
             logger.info("工作流已清空。")
             self.status_text.object = "状态：工作流已清空"
             if pn.state.notifications:
@@ -223,9 +223,9 @@ class MainView(param.Parameterized):
                 self.workflow.remove_node(node_id)
                 logger.info(f"节点 '{node_id}' 已从工作流移除。")
                 # 清除编辑器的选择状态 (它应该会触发 MainView 的 watcher 更新按钮状态)
-                self.workflow_editor.selected_node_id = None 
+                self.workflow_editor.selected_node_id = None
                 # 触发 workflow 更新，让编辑器和其他组件知道变化
-                self.param.trigger('workflow') 
+                self.param.trigger('workflow')
                 if pn.state.notifications:
                     pn.state.notifications.info(f"节点 '{node_id}' 已删除。", duration=2000)
             except Exception as e:
@@ -237,7 +237,7 @@ class MainView(param.Parameterized):
             if pn.state.notifications:
                 pn.state.notifications.warning("请先在画布上选择一个要删除的节点。", duration=3000)
 
-    # --- Layout Definition ---
+    # --- 布局定义 ---
     def panel(self) -> pn.viewable.Viewable:
         """返回应用程序的主 Panel 布局。"""
 
@@ -248,28 +248,29 @@ class MainView(param.Parameterized):
             self.clear_button,
             self.run_button,
             self.delete_node_button, # 删除按钮放回工具栏
-            pn.layout.HSpacer(),
             self.status_text,
-            height=60,
+            align='center',
+            sizing_mode='stretch_width',
             styles={'background': '#f0f0f0', 'padding': '10px'}
         )
 
-        # 使用 Tabs 组织不同的视图
-        tabs = pn.Tabs(
-            ('工作流编辑器', self.workflow_editor.panel()), # 第一个标签页是编辑器
-            # ('结果查看', pn.pane.Markdown("结果将在这里显示...")), # 示例：未来可以添加其他标签页
-            # ('仪表盘', pn.pane.Markdown("仪表盘..."))
-            dynamic=True, # 只有活跃的标签页会被渲染
-            sizing_mode='stretch_both'
+        # --- 创建应用程序的整体布局 ---
+        # 使用模板
+        template = pn.template.VanillaTemplate(
+            title="时间序列分析平台 (TSAP)",
+            sidebar_width=0, # 隐藏侧边栏，因为我们的主要导航在标签页
+            header_background="#0072B5", # Example header color
+            header_color="white",
+            busy_indicator=pn.indicators.BooleanStatus(value=False, color='success', align='center')
         )
 
-        layout = pn.Column(
-            toolbar,
-            tabs,
-            sizing_mode='stretch_both'
-        )
+        # 将工具栏添加到模板的页眉区域
+        template.header.append(toolbar)
 
-        return layout
+        # 将编辑器视图添加到主内容区域
+        template.main.append(self.workflow_editor.panel())
+
+        return template
 
 # --- 用于直接测试此视图 (可选) --- 
 # if __name__ == '__main__':

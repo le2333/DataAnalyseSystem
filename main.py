@@ -54,8 +54,9 @@ try:
     initial_workflow = Workflow(name="我的工作流")
     # 2. 创建 ViewModel，传入 Model
     workflow_view_model = WorkflowViewModel(workflow=initial_workflow)
-    # 3. 创建 View，传入 ViewModel
-    editor_view = WorkflowEditorView(view_model=workflow_view_model)
+    # 3. 创建 View，传入 ViewModel 和 NodeRegistry
+    # NodeRegistry 本身可以作为实例传递，因为它的方法是类/静态方法
+    editor_view = WorkflowEditorView(view_model=workflow_view_model, node_registry=NodeRegistry)
     logger.info("ViewModel 和 View 创建成功。")
 except Exception as e:
     logger.error(f"创建 MVVM 实例时出错: {e}", exc_info=True)
@@ -88,8 +89,8 @@ logger.info("已注册 refresh_nodes_on_load 回调，用于在会话加载时�
 # --- Make it Servable (at module level) ---
 logger.info("准备启动 Panel 服务...")
 try:
-    # 直接服务 WorkflowEditorView 的 panel
-    editor_view.panel().servable(title="工作流编辑器 (MVVM)")
+    # 直接服务 WorkflowEditorView 对象，Panel 会自动调用其 __panel__ 方法
+    editor_view.servable(title="工作流编辑器 (MVVM)")
     logger.info("应用已配置为可服务。请使用 'panel serve main.py --show' 来运行和查看。")
 except Exception as e:
      logger.error(f"配置 Panel 服务时出错: {e}", exc_info=True)

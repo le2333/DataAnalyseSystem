@@ -142,6 +142,7 @@ class BaseNode(param.Parameterized, abc.ABC, metaclass=NodeMeta):
             if name not in inputs:
                 raise ValueError(f"节点 '{self.node_type}' (ID: {self.node_id}) 缺少输入端口: {name}")
             # 基础类型检查
+            # TODO: 考虑支持更复杂的类型检查，例如 Optional[pl.DataFrame] 或 Union
             if not isinstance(inputs[name], expected_type):
                 # 考虑更灵活的检查，例如允许 None 或子类？目前严格匹配
                 raise ValueError(f"节点 '{self.node_type}' (ID: {self.node_id}) 输入端口 '{name}' 的类型错误。期望 {expected_type.__name__}, 得到 {type(inputs[name]).__name__}")

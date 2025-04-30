@@ -4,8 +4,8 @@ from typing import Dict, Any, Optional, Tuple, Union
 import polars as pl
 from prefect import flow, task, get_run_logger
 from prefect.futures import PrefectFuture
-# SequentialTaskRunner is the default in Prefect 2 if no concurrent runner is specified.
-# Remove the import: from prefect.task_runners import SequentialTaskRunner
+# SequentialTaskRunner 是 Prefect 2 中未指定并发运行器时的默认设置。
+# 移除导入: from prefect.task_runners import SequentialTaskRunner
 
 from .workflow import Workflow
 from core.node import BaseNode
@@ -28,7 +28,7 @@ def run_node_task(node: BaseNode, node_id: str, upstream_connections: Dict[str, 
         节点执行产生的输出 DataFrame 字典。
     """
     prefect_logger = get_run_logger()
-    prefect_logger.info(f"==> [TASK START] 执行节点: {node.node_type} (ID: {node_id}) 参数: {node.params}")
+    prefect_logger.info(f"==> [任务开始] 执行节点: {node.node_type} (ID: {node_id}) 参数: {node.params}")
 
     inputs: Dict[str, pl.DataFrame] = {}
     try:
@@ -120,15 +120,15 @@ def run_node_task(node: BaseNode, node_id: str, upstream_connections: Dict[str, 
                      # 可能需要根据策略决定是否抛出异常
 
         prefect_logger.debug(f"    节点 {node_id}: 输出验证完成。返回: {list(outputs.keys())}")
-        prefect_logger.info(f"<== [TASK SUCCESS] 节点 {node_id} 执行成功。")
+        prefect_logger.info(f"<== [任务成功] 节点 {node_id} 执行成功。")
         return outputs
 
     except Exception as e:
-        prefect_logger.error(f"<== [TASK FAILED] 执行节点 {node_id} (类型: {node.node_type}) 失败: {e}", exc_info=True)
+        prefect_logger.error(f"<== [任务失败] 执行节点 {node_id} (类型: {node.node_type}) 失败: {e}", exc_info=True)
         raise # 让异常冒泡，Prefect 会处理任务失败状态
 
 
-@flow(name="workflow-runner") # Remove task_runner argument for default sequential execution
+@flow(name="workflow-runner") # 移除 task_runner 参数以进行默认顺序执行
 def run_workflow_flow(workflow: Workflow):
     """
     一个 Prefect flow，用于执行整个 Workflow。
@@ -137,7 +137,7 @@ def run_workflow_flow(workflow: Workflow):
         workflow: 要执行的 Workflow 实例。
     """
     prefect_logger = get_run_logger()
-    prefect_logger.info(f"---- [FLOW START] 开始执行工作流: {workflow.name} ----")
+    prefect_logger.info(f"---- [流程开始] 开始执行工作流: {workflow.name} ----")
 
     if not workflow.validate():
         msg = f"工作流 '{workflow.name}' 验证失败，执行中止。"
@@ -248,8 +248,9 @@ class WorkflowRunner:
             # 如果 flow 有返回值，可以在这里接收并返回
             return None # 暂时返回 None
         except Exception as e:
-            logger.error(f"工作流 '{workflow.name}' 执行期间发生顶层错误: {e}", exc_info=True)
-            raise # 将异常重新抛出
+            logger.error(f"执行工作流 '{workflow.name}' 时发生顶层错误: {e}", exc_info=True)
+            # 根据需要决定是否重新抛出异常
+            raise
 
     # 异步运行暂时移除，因为 Prefect 2 的 run() 和直接调用行为有所不同
     # 如果需要异步，需要使用 Prefect Client 或其他部署方式
