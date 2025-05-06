@@ -134,9 +134,9 @@ class Workflow:
         # 对于有向图，NetworkX 默认不支持平行边，除非使用 MultiDiGraph。
         # 但为了代码健壮性，我们检查端口是否匹配。
         if self._graph.has_edge(source_node_id, target_node_id):
-        edge_data = self._graph.get_edge_data(source_node_id, target_node_id)
+            edge_data = self._graph.get_edge_data(source_node_id, target_node_id)
             if edge_data and edge_data.get('source_port') == source_port and edge_data.get('target_port') == target_port:
-            self._graph.remove_edge(source_node_id, target_node_id)
+                self._graph.remove_edge(source_node_id, target_node_id)
                 logger.info(f"已移除连接：从 '{source_node_id}.{source_port}' 到 '{target_node_id}.{target_port}'")
                 edge_found = True
 
@@ -279,7 +279,7 @@ class Workflow:
             #     tgt_port_name = data.get('target_port')
             #     # 检查类型兼容性...
 
-        return True
+            return True
         except Exception as e:
             logger.error(f"验证工作流 '{self.name}' 时出错: {e}", exc_info=True)
             return False
