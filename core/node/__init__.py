@@ -6,4 +6,7 @@ from .registry import NodeRegistry
 __all__ = [
     "BaseNode",
     "NodeRegistry"
-] 
+]
+
+# core/node 包
+# 包含节点基类和工具 
