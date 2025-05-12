@@ -32,7 +32,7 @@ classdef ProcessorNode < handle
         function addDependency(obj, node)
             %ADDDEPENDENCY 添加依赖节点
             %   添加一个此节点依赖的节点
-            if ~ismember(node, obj.Dependencies)
+            if ~any(cellfun(@(n) n == node, obj.Dependencies))
                 obj.Dependencies{end+1} = node;
             end
         end

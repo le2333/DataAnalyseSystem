@@ -3,7 +3,7 @@ function time_frequency_slice_animation()
 % 本脚本对原始数据进行切片，并展示每个片段的时域和频域信息，支持手动播放控制
 
 % 1. 加载数据
-filename = '..\data\raw\sat3\5_2025031706435044765.csv';
+filename = '..\data\sat1\5_2025031706435044765.csv';
 [time, value] = load_and_parse_data(filename);
 
 % 2. 数据预处理参数

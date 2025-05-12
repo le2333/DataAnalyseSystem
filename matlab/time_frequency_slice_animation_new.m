@@ -7,7 +7,7 @@ function time_frequency_slice_animation_new()
 workflow = TimeFrequencyWorkflow();
 
 % 2. 加载数据
-filename = '..\data\raw\sat3\5_2025031706435044765.csv';
+filename = fullfile('..', 'data', 'sat1', '5_2025031706435044765.csv');
 workflow.loadData(filename);
 
 % 3. 创建主图形窗口

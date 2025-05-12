@@ -39,10 +39,10 @@ classdef WorkflowManager < handle
             %   将源节点的输出连接到目标节点的输入
             
             % 确保节点在工作流中
-            if ~ismember(sourceNode, obj.Nodes)
+            if ~any(cellfun(@(n) n == sourceNode, obj.Nodes))
                 error('源节点不在工作流中');
             end
-            if ~ismember(targetNode, obj.Nodes)
+            if ~any(cellfun(@(n) n == targetNode, obj.Nodes))
                 error('目标节点不在工作流中');
             end
             
@@ -221,7 +221,7 @@ classdef WorkflowManager < handle
                     
                     % 减少依赖此节点的节点的入度
                     for j = 1:nodeCount
-                        if ismember(obj.Nodes{nodeIndex}, obj.Nodes{j}.Dependencies)
+                        if any(cellfun(@(n) n == obj.Nodes{nodeIndex}, obj.Nodes{j}.Dependencies))
                             inDegree(j) = inDegree(j) - 1;
                         end
                     end
