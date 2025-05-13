@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
+
 class MTS:
     def __init__(self, ts):
         self.ts = ts
@@ -13,6 +14,7 @@ class MTS:
         self.ts = X
         return X.transpose() @ X
 
+
 class CPCA:
     def __init__(self, epsilon=1e-5):
         self.cov = None
@@ -22,7 +24,7 @@ class CPCA:
         self.S = None
 
     def fit(self, listMTS):
-        if (len(listMTS) > 0):
+        if len(listMTS) > 0:
             P = listMTS[0].cov_mat().shape[1]
             cov_mat = [mat.cov_mat() for mat in listMTS]
             self.cov = sum(cov_mat) / len(cov_mat)
@@ -37,23 +39,27 @@ class CPCA:
 
     def pred(self, listMTS, ncp):
         predicted = []
-        if (self.U is not None):
+        if self.U is not None:
             predicted = [elem.ts @ self.U[:, :ncp] for elem in listMTS]
         return predicted
 
     def reconstitution_error(self, listMTS, ncp):
         mse = np.full(len(listMTS), np.inf)
-        if (self.U is not None):
+        if self.U is not None:
             prediction = self.pred(listMTS, ncp)
             reconstit = [elem @ ((self.U)[:, :ncp].transpose()) for elem in prediction]
-            mse = [((listMTS[i].ts - reconstit[i]) ** 2).sum() for i in range(len(prediction))]
+            mse = [
+                ((listMTS[i].ts - reconstit[i]) ** 2).sum()
+                for i in range(len(prediction))
+            ]
         return mse
+
 
 class Mc2PCA:
     def __init__(self, K, ncp, itermax=1000, conv_crit=1e-5):
         """
         MC2PCA算法初始化
-        
+
         参数:
         K: 聚类数量
         ncp: 主成分数量
@@ -72,10 +78,10 @@ class Mc2PCA:
     def fit(self, X):
         """
         训练MC2PCA模型
-        
+
         参数:
         X: 列表，包含MTS对象
-        
+
         返回:
         index_cluster: 聚类结果索引
         """
@@ -89,20 +95,27 @@ class Mc2PCA:
         while to_continue:
             # Split all MTS according to the cluster
             # we store it in a list of lists of MTS (each list inside the list corresponding to a cluster)
-            MTS_by_cluster = [[X[i] for i in list(np.where(index_cluster == j)[0])] for j in range(self.K)]
+            MTS_by_cluster = [
+                [X[i] for i in list(np.where(index_cluster == j)[0])]
+                for j in range(self.K)
+            ]
 
             CPCA_by_cluster = [CPCA() for i in range(self.K)]
 
             # fit by cluster
             [CPCA_by_cluster[i].fit(MTS_by_cluster[i]) for i in range(self.K)]
 
-            res = np.array([cpca.reconstitution_error(X, self.ncp) for cpca in CPCA_by_cluster])
+            res = np.array(
+                [cpca.reconstitution_error(X, self.ncp) for cpca in CPCA_by_cluster]
+            )
             # Update index cluster
             index_cluster = res.argmin(axis=0)
 
             # new total error
             new_error = res.min(axis=0).sum()
-            to_continue = (abs(old_error - new_error) > self.conv_crit) & (self.iter_max > i)
+            to_continue = (abs(old_error - new_error) > self.conv_crit) & (
+                self.iter_max > i
+            )
             self.converged = np.abs(old_error - new_error) < self.conv_crit
 
             # Updata
@@ -115,10 +128,10 @@ class Mc2PCA:
     def precision(self, gt_cluster):
         """
         计算聚类准确率
-        
+
         参数:
         gt_cluster: 真实标签
-        
+
         返回:
         precision: 聚类准确率
         """
@@ -146,16 +159,17 @@ class Mc2PCA:
         prop_part = np.array([C[j].shape[0] / N for j in range(self.K)])
         return max_part.dot(prop_part)
 
+
 def search_ncp(X, K, ncp_list, y_true):
     """
     搜索最佳主成分数量
-    
+
     参数:
     X: 列表，包含MTS对象
     K: 聚类数量
     ncp_list: 要测试的主成分数量列表
     y_true: 真实标签
-    
+
     返回:
     best_ncp: 最佳主成分数量
     pre: 对应的准确率
@@ -169,36 +183,52 @@ def search_ncp(X, K, ncp_list, y_true):
     best_ncp = ncp_list[np.argmax(pres)]
     return best_ncp, pre
 
+
 def mc2pca_clustering(df, K, ncp, itermax=1000, conv_crit=1e-5):
     """
     使用MC2PCA进行聚类
-    
+
     参数:
-    df: 多维DataFrame，包含多个时间序列
+    df: 多维DataFrame。此实现假设DataFrame的每一行代表一个独立的样本（或单点时间序列）进行聚类。
+        如果df代表需要进一步分割的长序列，或者包含多个由ID列标识的序列，
+        则调用此函数前需要进行相应的预处理，以生成一个MTS对象的列表。
     K: 聚类数量
     ncp: 主成分数量
     itermax: 最大迭代次数
     conv_crit: 收敛阈值
-    
+
     返回:
-    返回聚类结果DataFrame (original_df, cluster)
+    返回带有聚类结果的DataFrame (原始df的副本，增加一列 'cluster')
     """
     # 保存原始DataFrame副本
     data = df.copy()
     # 仅保留数值列用于创建MTS对象
-    numeric_df = data.select_dtypes(include=['number'])
+    numeric_df = data.select_dtypes(include=["number"])
+
     # 确保有数值特征
     if numeric_df.shape[1] == 0:
         raise ValueError("输入的DataFrame不包含数值列，无法创建MTS对象。")
-    mts= MTS(numeric_df.values)
-    
+
+    # 如果没有数据行（在选择了数值列之后），则直接返回带有空cluster列的DataFrame副本
+    if numeric_df.shape[0] == 0:
+        data["cluster"] = np.array([], dtype=int)  # 聚类标签通常是整数
+        return data
+
+    # 将numeric_df的每一行转换为一个MTS对象
+    # 每个MTS对象的ts属性将是形如 (1, num_features) 的numpy数组
+    list_of_mts = []
+    for i in range(numeric_df.shape[0]):
+        # .values获取numpy数组，然后reshape
+        row_data = numeric_df.iloc[i].values.reshape(1, -1)
+        list_of_mts.append(MTS(row_data))
+
     # 训练MC2PCA模型
     model = Mc2PCA(K=K, ncp=ncp, itermax=itermax, conv_crit=conv_crit)
-    clusters = model.fit(mts)
-    
-    # 创建基本聚类结果DataFrame
-    result_df = pd.DataFrame({
-        'cluster': clusters
-    })
-    
-    return pd.concat([data, result_df], axis=1, ignore_index=True)
+    # clusters 将是一个numpy数组，其长度等于 list_of_mts 的长度
+    clusters = model.fit(list_of_mts)
+
+    # 将聚类结果添加为新列到data DataFrame中
+    # clusters的长度应该等于numeric_df的行数（也是data的行数，因为numeric_df是从data选择列得到的）
+    data["cluster"] = clusters
+
+    return data
