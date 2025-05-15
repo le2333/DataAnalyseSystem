@@ -1,0 +1,174 @@
+"""
+视图层公共组件和辅助工具。
+
+为界面组件提供通用功能和可重用实现，如：
+- ServiceSelector：服务选择控件
+- ParameterPanel：动态参数配置面板
+"""
+import panel as pn
+import param
+from typing import Dict, Any, Optional, List
+
+# 类型别名，服务和注册表的信息类型
+ServiceInfo = Dict[str, Any]
+ServiceRegistry = Dict[str, ServiceInfo]
+
+class ServiceSelector(param.Parameterized):
+    """服务选择器组件。
+    
+    包装了一个服务选择下拉框，以及用于展示所选服务相关信息的面板。
+    - 从注册表中生成选项列表
+    - 触发参数化事件以便父组件响应选择变化
+    - 可使用 get_panel() 获取完整布局
+    """
+    
+    # 传入依赖
+    registry = param.Dict(default={}, doc="服务注册表")
+    selector_label = param.String(default="选择服务", doc="选择框标签")
+    
+    # 组件状态
+    selected_service_name = param.String(default="", doc="当前选中的服务名称")
+    selected_service_info = param.Dict(default={}, doc="当前选中的服务信息")
+    
+    # UI 组件
+    service_selector = param.ClassSelector(class_=pn.widgets.Select, is_instance=True)
+    
+    def __init__(self, registry: ServiceRegistry, selector_label: str = "选择服务", **params):
+        """初始化 ServiceSelector。
+        
+        Args:
+            registry: 服务注册表，包含 {服务名称: 服务信息} 的映射
+            selector_label: 选择框的标签，默认为 "选择服务"
+            **params: param.Parameterized 的标准参数
+        """
+        super().__init__(registry=registry, selector_label=selector_label, **params)
+        
+        # 初始化组件
+        service_options = self._get_service_options()
+        self.service_selector = pn.widgets.Select(
+            name=self.selector_label,
+            options=service_options,
+            value=service_options[0][0] if service_options else None,
+        )
+        
+        # 设置选择变化回调
+        self.service_selector.param.watch(self._on_service_select, 'value')
+        
+        # 初始更新选中状态 (如果有默认选项)
+        if service_options:
+            # Note: 不能在构造器中直接调用这个方法，原因是它涉及触发参数更改事件，
+            # 而那些依赖这些事件的 watchers 可能还未建立
+            self._update_selected_service_info(service_options[0][0])
+    
+    def _get_service_options(self) -> List[tuple]:
+        """从注册表生成下拉框选项。
+        
+        生成 (value, label) 格式的元组列表，增加一个空选项在最前面。
+        
+        Returns:
+            服务选项列表，每项为 (name, label) 元组
+        """
+        # 处理可能的空注册表
+        if not self.registry:
+            return [("", "-- 无可用服务 --")]
+        
+        # 从注册表生成选项
+        service_options = [("", "-- 请选择 --")]
+        service_options.extend([(name, name) for name in sorted(self.registry.keys())])
+        return service_options
+    
+    def _on_service_select(self, event):
+        """下拉框选择变化的事件处理程序。"""
+        self._update_selected_service_info(event.new)
+    
+    def _update_selected_service_info(self, service_name: str):
+        """更新选中的服务名称和信息。
+        
+        设置 selected_service_name 和 selected_service_info 参数，
+        触发依赖参数的事件处理程序。
+        """
+        # 更新选中服务名称参数
+        # 这里将内部 service_selector 值同步到 Parameterized 属性
+        self.selected_service_name = service_name
+        
+        # 更新选中服务信息参数
+        if not service_name:
+            self.selected_service_info = {}
+        else:
+            self.selected_service_info = self.registry.get(service_name, {})
+    
+    def get_panel(self) -> pn.Column:
+        """获取完整的服务选择器面板。
+        
+        Returns:
+            包含服务选择器的 Panel 布局
+        """
+        return pn.Column(
+            self.service_selector,
+            sizing_mode='stretch_width'
+        )
+
+class ParameterPanel(param.Parameterized):
+    """动态参数配置面板。
+    
+    根据提供的参数规范，动态生成并管理参数输入控件。
+    - 根据参数类型生成适当的输入控件
+    - 处理参数值的变化和验证
+    - 可使用 get_panel() 获取完整布局
+    """
+    
+    # 传入依赖
+    params_spec = param.Dict(default={}, doc="参数规范字典")
+    
+    def __init__(self, params_spec: Dict[str, Dict[str, Any]] = None, **params):
+        """初始化 ParameterPanel。
+        
+        Args:
+            params_spec: 参数规范字典，格式为 {参数名: 参数配置}
+                        参数配置为 {type: 类型, label: 标签, ...}
+            **params: param.Parameterized 的标准参数
+        """
+        if params_spec is None:
+            params_spec = {}
+        super().__init__(params_spec=params_spec, **params)
+        self._widgets = {}  # 保存从参数名到控件的映射
+        self._update_widgets()
+        
+        # 监听参数规范变化
+        self.param.watch(self._update_widgets, 'params_spec')
+    
+    def _create_widget_selector(self, service_name="_ParameterPanel_", # 提供虚拟名称
+                               registry={"_ParameterPanel_": {"params": self.params_spec}}, # 包装 spec
+                               selector_label="参数面板"):
+        """使用 ServiceSelector 封装参数规范。
+        
+        这是一个为了重用而设计的替代方法，但实际上，因为我们处理的参数规范更简单，
+        我们使用这个方法来测试想法，然后直接实现了 _update_widgets()。
+        """
+        pass
+    
+    def _update_widgets(self, event=None):
+        """更新参数输入控件列表。
+        
+        基于当前的 params_spec，清理旧控件，生成新控件。
+        """
+        # 清空之前的控件
+        self._widgets = {}
+    
+    def get_params(self) -> Dict[str, Any]:
+        """获取所有参数的当前值。
+        
+        Returns:
+            包含所有参数名和当前值的字典 {参数名: 参数值}
+        """
+        params = {}
+        # 实现将从控件收集值的逻辑
+        return params
+    
+    def get_panel(self) -> pn.Column:
+        """获取完整的参数配置面板。
+        
+        Returns:
+            包含参数输入控件的 Panel 布局
+        """
+        return pn.Column(sizing_mode='stretch_width') 

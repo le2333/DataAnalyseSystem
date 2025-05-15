@@ -1,17 +1,19 @@
 import param
 import uuid
 import pandas as pd
-from typing import Dict, List, Optional, Type, Union, Tuple, cast, TypeAlias
+from typing import Dict, List, Optional, Type, Union, Tuple, cast, TypeAlias, Any
 from .data_container import DataContainer
+
 # 导入新的具体容器类型
 from .timeseries_container import TimeSeriesContainer
-from .image_set_container import ImageSetContainer 
-import datetime # 导入 datetime 以便在 get_summary_list 中使用
+from .image_set_container import ImageSetContainer
+import datetime  # 导入 datetime 以便在 get_summary_list 中使用
 
 # 定义支持的数据容器类型联合
 SupportedData: TypeAlias = Union[TimeSeriesContainer, ImageSetContainer]
 # 如果未来增加 AnalysisResult 等，在这里添加
 # SupportedData = Union[TimeSeriesContainer, ImageSetContainer, AnalysisResult]
+
 
 class DataManager(param.Parameterized):
     """管理应用中所有的数据容器对象。
@@ -42,7 +44,9 @@ class DataManager(param.Parameterized):
             ValueError: 如果 data_container 的名称无效 (由 DataContainer 的 setter 引发)。
         """
         if not isinstance(data_container, SupportedData):
-             raise TypeError(f"只能添加支持的数据类型 ({SupportedData})，而不是 {type(data_container).__name__}。")
+            raise TypeError(
+                f"只能添加支持的数据类型 ({SupportedData})，而不是 {type(data_container).__name__}。"
+            )
 
         dc_to_add = cast(SupportedData, data_container)
 
@@ -54,25 +58,27 @@ class DataManager(param.Parameterized):
         while new_name in current_names:
             new_name = f"{original_name}_{count}"
             count += 1
-        
+
         # 如果名称被修改，则更新容器实例的名称
         if new_name != original_name:
-             try:
-                 dc_to_add.name = new_name 
-             except ValueError as e:
-                 # DataContainer 的 name.setter 会进行验证
-                 print(f"警告: 尝试自动重命名数据容器 '{original_name}' 为 '{new_name}' 时失败: {e}")
-                 # 尽管重命名失败，但可能仍然可以添加（如果原始名称有效且未冲突），或者根据需要抛出异常
-                 # 这里选择继续添加，但打印警告
-                 pass 
+            try:
+                dc_to_add.name = new_name
+            except ValueError as e:
+                # DataContainer 的 name.setter 会进行验证
+                print(
+                    f"警告: 尝试自动重命名数据容器 '{original_name}' 为 '{new_name}' 时失败: {e}"
+                )
+                # 尽管重命名失败，但可能仍然可以添加（如果原始名称有效且未冲突），或者根据需要抛出异常
+                # 这里选择继续添加，但打印警告
+                pass
 
         # 使用 param.Dict 的方式更新以触发 Panel 依赖更新
         # 直接修改 self._data_store[dc_to_add.id] = dc_to_add 不会触发 param 更新
         new_store = self._data_store.copy()
         new_store[dc_to_add.id] = dc_to_add
-        self._data_store = new_store 
+        self._data_store = new_store
 
-        self._trigger_update() # 触发数据更新事件
+        self._trigger_update()  # 触发数据更新事件
         return dc_to_add.id
 
     def get_data(self, data_id: str) -> Optional[SupportedData]:
@@ -105,17 +111,19 @@ class DataManager(param.Parameterized):
 
     def get_all_data(self) -> List[SupportedData]:
         """获取当前管理器中所有数据容器的列表。
-        
+
         Returns:
             包含所有数据容器对象 (具体子类型) 的列表。
         """
         return list(self._data_store.values())
 
-    def get_data_options(self, filter_type: Optional[Type[DataContainer]] = None) -> List[Tuple[str, str]]:
+    def get_data_options(
+        self, filter_type: Optional[Type[DataContainer]] = None
+    ) -> List[Tuple[str, str]]:
         """获取用于 UI 选择器（如下拉列表）的数据选项列表。
 
         Args:
-            filter_type: (可选) 只包含指定类型的数据容器的基类或具体类 
+            filter_type: (可选) 只包含指定类型的数据容器的基类或具体类
                          (例如 DataContainer, TimeSeriesContainer)。
                          如果为 None，则包含所有类型。
 
@@ -126,12 +134,16 @@ class DataManager(param.Parameterized):
         options = []
         try:
             # 按名称排序，忽略大小写
-            sorted_items = sorted(self._data_store.values(), key=lambda dc: dc.name.lower())
+            sorted_items = sorted(
+                self._data_store.values(), key=lambda dc: dc.name.lower()
+            )
         except AttributeError:
-             # 处理可能的 name 属性缺失（理论上不应发生）
-             print("警告: 获取数据选项时，部分数据项缺少 'name' 属性，将使用未排序列表。")
-             sorted_items = list(self._data_store.values())
-             
+            # 处理可能的 name 属性缺失（理论上不应发生）
+            print(
+                "警告: 获取数据选项时，部分数据项缺少 'name' 属性，将使用未排序列表。"
+            )
+            sorted_items = list(self._data_store.values())
+
         for dc in sorted_items:
             # 进行类型过滤
             if filter_type is None or isinstance(dc, filter_type):
@@ -139,7 +151,9 @@ class DataManager(param.Parameterized):
                 options.append((display_name, dc.id))
         return options
 
-    def get_summary_list(self, filter_type: Optional[Type[DataContainer]] = None, sort_key: str = 'name') -> List[Dict[str, Any]]:
+    def get_summary_list(
+        self, filter_type: Optional[Type[DataContainer]] = None, sort_key: str = "name"
+    ) -> List[Dict[str, Any]]:
         """获取所有（或过滤后的）数据容器的摘要信息列表，通常用于 UI 表格显示。
 
         Args:
@@ -159,30 +173,40 @@ class DataManager(param.Parameterized):
                     summaries.append(summary)
                 except Exception as e:
                     # 如果获取摘要失败，记录错误并添加基础信息
-                    print(f"警告: 获取数据 '{getattr(dc, 'name', '(无名)')}' ({dc_id}) 的摘要时出错: {e}")
-                    summaries.append({
-                        'id': dc_id,
-                        'name': getattr(dc, 'name', '(无名)'),
-                        'type': getattr(dc, 'data_type', '(未知类型)'),
-                        'created_at': getattr(dc, 'created_at', datetime.datetime.min).strftime('%Y-%m-%d %H:%M:%S'),
-                        'status': f'获取摘要错误: {e}'
-                    })
+                    print(
+                        f"警告: 获取数据 '{getattr(dc, 'name', '(无名)')}' ({dc_id}) 的摘要时出错: {e}"
+                    )
+                    summaries.append(
+                        {
+                            "id": dc_id,
+                            "name": getattr(dc, "name", "(无名)"),
+                            "type": getattr(dc, "data_type", "(未知类型)"),
+                            "created_at": getattr(
+                                dc, "created_at", datetime.datetime.min
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                            "status": f"获取摘要错误: {e}",
+                        }
+                    )
 
         # 确定排序方向和排序键的处理方式
-        reverse_sort = (sort_key == 'created_at')
-        sort_lambda = lambda x: str(x.get(sort_key, '')).lower() if sort_key == 'name' else x.get(sort_key, None)
-        
+        reverse_sort = sort_key == "created_at"
+        sort_lambda = (
+            lambda x: str(x.get(sort_key, "")).lower()
+            if sort_key == "name"
+            else x.get(sort_key, None)
+        )
+
         try:
             summaries.sort(key=sort_lambda, reverse=reverse_sort)
         except TypeError as e:
-             # 处理可能的排序键类型混合问题
-             print(f"警告: 按键 '{sort_key}' 排序摘要列表时出错 (可能是类型混合): {e}")
-             try:
-                 # 回退到按名称排序
-                 summaries.sort(key=lambda x: str(x.get('name', '')).lower())
-             except Exception as fallback_e:
-                 print(f"警告: 回退按名称排序摘要列表也失败: {fallback_e}")
-                 # 如果连按名称排序都失败，则返回未排序列表
+            # 处理可能的排序键类型混合问题
+            print(f"警告: 按键 '{sort_key}' 排序摘要列表时出错 (可能是类型混合): {e}")
+            try:
+                # 回退到按名称排序
+                summaries.sort(key=lambda x: str(x.get("name", "")).lower())
+            except Exception as fallback_e:
+                print(f"警告: 回退按名称排序摘要列表也失败: {fallback_e}")
+                # 如果连按名称排序都失败，则返回未排序列表
 
         return summaries
 
@@ -208,18 +232,22 @@ class DataManager(param.Parameterized):
             return False
         # 如果新名称与旧名称相同，视为成功，无需操作
         if clean_new_name == data_object.name:
-             return True 
+            return True
 
         # 检查新名称是否与 *其他* 数据项冲突
-        current_names = {dc.name for id, dc in self._data_store.items() if id != data_id}
+        current_names = {
+            dc.name for id, dc in self._data_store.items() if id != data_id
+        }
         if clean_new_name in current_names:
-            print(f"警告: 名称 '{clean_new_name}' 已被其他数据项使用，无法重命名 ID {data_id}。")
+            print(
+                f"警告: 名称 '{clean_new_name}' 已被其他数据项使用，无法重命名 ID {data_id}。"
+            )
             return False
 
         try:
             # 尝试更新 DataContainer 对象的名称 (会触发其内部验证)
-            data_object.name = clean_new_name 
-            self._trigger_update() # 触发更新以通知 UI
+            data_object.name = clean_new_name
+            self._trigger_update()  # 触发更新以通知 UI
             return True
         except ValueError as e:
             # 捕获 DataContainer setter 可能抛出的 ValueError
@@ -228,4 +256,4 @@ class DataManager(param.Parameterized):
 
     def _trigger_update(self):
         """触发 _data_updated 事件，通知监听者数据已更改。"""
-        self.param.trigger('_data_updated') 
+        self.param.trigger("_data_updated")
